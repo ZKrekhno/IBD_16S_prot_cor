@@ -4,8 +4,54 @@ output: html_notebook
 author: Zakhar Krekhno
 ---
 
-```{r}
-
+```{r, echo=FALSE, include=FALSE}
+library(phyloseq)
+library(EnhancedVolcano)
+library(readxl)
+library(reshape2)
+library(psych)
+library(tidyverse)
+theme_set(theme_classic(base_size = 14))
+calc_relative_abund <- function(x) x/sum(x)
 ```
+
+Import proteomics data
+```{r import-prot}
+mq <- read_excel(here::here("Rav_198results.xlsx"), sheet = 2)
+#Log transform the MS data
+mq_log <- mq %>% 
+  mutate(across(-Genes,~ as.numeric(str_replace_na(.,replacement = 0)))) %>% 
+  mutate(across(-Genes,~log2(.+1)))
+codes <- read_excel(here::here("Metadata.xlsx"))
+meta_full <- codes %>% 
+  select("sample" = `#SampleID`, "group" = Group, everything()) %>% 
+  filter(sample %in% colnames(mq)) %>% 
+  mutate(across(matches("(Active)|(TI_resection)|(Cholestyramine)"), ~as.character(fct_recode(as_factor(.x), 
+                                                Yes = "1", No = "0", Not_applicable = "NA"))))
+#Prepare the MS data matrix for spearman correlations
+mq_mat <- mq_log %>% 
+  column_to_rownames(var = "Genes") %>% 
+  as.matrix() %>% 
+  t()
+```
+
+Import 16S data
+Filter the samples a bit:
+Remove all irrelevant samples. Sample I60IRep seems to actually be sample I61I, so rename it as such. Remove REP from sample names
+
+```{r import-16S}
+biom <-  import_biom("table-with-taxonomy.biom", parseFunction = parse_taxonomy_default)
+tree <- read_tree_greengenes("tree.nwk")
+metadata <- import_qiime_sample_data("metadata.txt")
+physeq <- merge_phyloseq(biom, metadata, tree)
+#Remove irrelevant samples
+physeq <- subset_samples(physeq, !(sample_names(physeq) %in% c("C34C","I01I","I69I","I12I", "I44I")))
+#Remove all mocks, and negative controls
+physeq <- subset_samples(physeq, str_detect(X.SampleID, "(Mock)|(Neg)|(TC7)|(H2O)", negate = T))
+sample_names(physeq) <- str_replace(sample_names(physeq),"I60IRep","I61I")
+sample_names(physeq) <- str_remove(sample_names(physeq),"Rep")
+```
+
+
 
 
