@@ -18,6 +18,7 @@ Import all the necessary matrices for analysis
 ```{r import}
 files <- list.files(path = here::here("corr_mats/"))
 otu_file_list <- str_subset(files,"otu")
+tax_file_list <- str_subset(files,"tax")
 ms_file_list <- str_subset(files, "ms")
 #Import otu counts
 otu_list <- map(otu_file_list, 
@@ -39,20 +40,31 @@ spear_BH_list <- map(otu_mat_list,
 coef_list <- map2(rep(spear_BH_list,each=3),rep(c("r","p","p.adj"),times = 3), ~melt(.x [.y]))
 df_list <- map(list(coef_list [1:3],coef_list [4:6],coef_list [7:9]),
                ~reduce(.,left_join, by = c("Var1","Var2")))
-walk2(df_list, c("Family","Genus", "Species"),
-      ~write_csv(.x,here::here(str_c("spear_results/whole_cohort_",.y,"_cor.csv"))))
-d <- df_list [[1]]
+#walk2(df_list, c("Family","Genus", "Species"),
+ #     ~write_csv(.x,here::here(str_c("spear_results/whole_cohort_",.y,"_cor.csv"))))
 ```
 
 Plot results of the correlation test
 ```{r spearman-plot}
-df_filt <- df %>% 
-  filter(abs(value.x) > 0.3, value.y < 0.05)
-ggplot(df_filt, aes(x=Var1, y=Var2)) +
-  geom_point(aes(color = value.x, fill = value.x, size = value.y), alpha = 0.6, shape = 21) +
-  scale_fill_distiller(palette = "PuOr") +
-  scale_color_distiller(palette = "PuOr") +
-  theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 0.9))
+#Filter the results to only include somewhat meaningful work
+df_filt_list <- df_list %>% 
+  map(~filter(.,abs(value.x) > 0.3, value.y < 0.05))
+#Get taxonomy to assign meaningul names
+tax_list <- map(tax_file_list, 
+                    ~read_csv(file = here::here(str_c("corr_mats/",.))))
+#Add taxonomy information to each result
+df_tax_list <- map2(df_filt_list, tax_list,left_join, by = c("Var2" = "...1"))
+ranks <- c("Family","Genus", "Species")
+#pdf(here::here("spear_results/Whole cohort Spearman correlations.pdf"), height = 12, width = 15)
+walk2(df_tax_list,ranks,
+      ~print(ggplot(.x, aes_(x=quote(Var1), y=as.name(.y))) +
+              geom_point(aes(color = value.x, fill = value.x, size = value.y), alpha = 0.6, shape = 21) +
+              scale_fill_distiller(name = "Spearman rho",palette = "PuOr") +
+              scale_color_distiller(name = "Spearman rho", palette = "PuOr") +
+              scale_size(name = "Unadjusted p",trans = 'reverse') +
+              labs(x=element_blank(), title = "Whole cohort Spearman correlations") +
+              theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 0.9))))
+#dev.off()
 ```
 
 
