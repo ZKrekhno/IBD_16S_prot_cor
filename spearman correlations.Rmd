@@ -54,12 +54,38 @@ all(sample_names(physeq_intersect) %in% colnames(mq_intersect))
 ```
 Next transpose the matrices to prepare them for Spearman correlations
 
-```{r create-spearman-matrix}
+```{r create-spearman-matrix-ms}
 #Prepare the MS data matrix for spearman correlations
-mq_mat <- mq_intersect %>% 
+#Only keep proteins that were detected in at least 30% of the samples above an expression cut-off of 6 (log-value)
+#Remove low prevalence proteins
+mq_prevalence_filter <- mq_intersect %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  mutate(across(everything(), ~.>0))
+mq_prev_sum <- mq_prevalence_filter %>% 
+  summarise(across(everything(), sum)) %>% 
+  mutate(across(everything(),~./ncol(mq_intersect)))
+prevalent_proteins <- mq_prev_sum %>% 
+  select(where(~.x >= 0.3)) %>% 
+  colnames()
+#Reduce the initial matrix to just prevalent proteins
+mq_intersect_prev <- mq_intersect [rownames(mq_intersect) %in% prevalent_proteins,]
+#Choose cut-off of 6
+mq_prev_abund <- mq_intersect_prev [rowMeans(mq_intersect_prev) >6,]
+mq_mat <- mq_prev_abund %>% 
   as.matrix() %>% 
   t()
+#pdf(here::here("spear_results/MS_histograms.pdf"),width = 8, height = 6)
+pwalk(list(list(mq_intersect,mq_intersect_prev,mq_prev_abund),
+           c("Unfiltered","Prevalence-filtered", "Prevalence and abundance filtered"),
+           c("","Prevalent in at least 30% of samples", "Mean abundance of at least 6 (log value)")),
+      ~hist(rowMeans(..1),main = ..2, sub = ..3, xlab = "Log expression value"))
+#dev.off()
 #write.csv(mq_mat, here::here("corr_mats/ms_matrix.csv"))
+```
+
+
+```{r create-spearman-matrix-16s}
 #Prepare the 16S tables
 phy_genus <- tax_glom(physeq_intersect,taxrank = "Genus")
 phy_family <- tax_glom(physeq_intersect,taxrank = "Family")
@@ -72,11 +98,28 @@ tax_list <- map(phy_rel, tax_table)
  #     ~write.csv(.x, here::here(str_c("corr_mats/",.y,".csv", sep = ""))))
 
 otu_rel <- map(phy_rel,otu_table)
-otu_mat <- otu_rel %>% 
+#Do similar filtering on otu tables as proteomics data - remove low prevalence and abundance microbes
+otu_prevalent <- otu_rel %>% 
+  map(t) %>% 
+  map(as.data.frame) %>% 
+  map(~mutate(.,across(everything(), ~.>0))) %>% 
+  map(~summarise(.,across(everything(), sum))) %>% 
+  map(~mutate(.,across(everything(),~./ncol(mq_intersect))))
+#Keep bugs present in at least 1% of the patients
+prevalent_otus_list <- otu_prevalent %>% 
+  map(~select(.,where(~.x >= 0.01))) %>% 
+  map(colnames)
+otu_prev_filt_list <- otu_rel %>% 
+  map2(prevalent_otus_list,~.x[rownames(.x) %in% .y])
+#Next filter bugs by abundance - mean abundance of at least 0.0005%
+otu_prev_abund_list <- otu_prev_filt_list %>% 
+  map(~.[rowMeans(.)>0.000005])
+#Organize into matrix form and print
+otu_mat <- otu_prev_abund_list %>% 
   map(as.matrix) %>% 
   map(t)
 #walk2(otu_mat, c("Species_otu","Genus_otu", "Family_otu"),
- #     ~write.csv(.x, here::here(str_c("corr_mats/",.y,".csv", sep = ""))))
+     # ~write.csv(.x, here::here(str_c("corr_mats/",.y,".csv", sep = ""))))
 ```
 
 
