@@ -30,4 +30,28 @@ mq_mat <- read_csv(file = here::here(str_c("corr_mats/",ms_file_list))) %>%
   column_to_rownames(var = "...1") %>% 
   as.matrix()
 ```
+Continue on to basic Spearman correlations on the whole dataset
+
+```{r spearman, warning=FALSE}
+spear_BH <- corr.test(x = mq_mat, y = otu_mat_list [[1]], use = "pairwise", method="spearman", adjust="BH", ci=FALSE)
+spear_BH_list <- map(otu_mat_list,
+                     ~corr.test(x = mq_mat, y = ., use = "pairwise", method="spearman", adjust="BH", ci=FALSE))
+r <- melt(spear_BH$r)
+p <- melt(spear_BH$p)
+p.adj <- melt(spear_BH$p.adj)
+df <- list(r,p,p.adj) %>% 
+  reduce(left_join, by = c("Var1","Var2"))
+```
+
+Plot results of the correlation test
+```{r spearman-plot}
+df_filt <- df %>% 
+  filter(abs(value.x) > 0.3, value.y < 0.05)
+ggplot(df_filt, aes(x=Var1, y=Var2)) +
+  geom_point(aes(color = value.x, fill = value.x, size = value.y), alpha = 0.6, shape = 21) +
+  scale_fill_distiller(palette = "PuOr") +
+  scale_color_distiller(palette = "PuOr") +
+  theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 0.9))
+```
+
 
