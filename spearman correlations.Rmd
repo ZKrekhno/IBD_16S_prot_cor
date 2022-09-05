@@ -105,9 +105,9 @@ otu_prevalent <- otu_rel %>%
   map(~mutate(.,across(everything(), ~.>0))) %>% 
   map(~summarise(.,across(everything(), sum))) %>% 
   map(~mutate(.,across(everything(),~./ncol(mq_intersect))))
-#Keep bugs present in at least 1% of the patients
+#Keep bugs present in at least 5% of the patients
 prevalent_otus_list <- otu_prevalent %>% 
-  map(~select(.,where(~.x >= 0.01))) %>% 
+  map(~select(.,where(~.x >= 0.05))) %>% 
   map(colnames)
 otu_prev_filt_list <- otu_rel %>% 
   map2(prevalent_otus_list,~.x[rownames(.x) %in% .y])
@@ -119,8 +119,34 @@ otu_mat <- otu_prev_abund_list %>%
   map(as.matrix) %>% 
   map(t)
 #walk2(otu_mat, c("Species_otu","Genus_otu", "Family_otu"),
-     # ~write.csv(.x, here::here(str_c("corr_mats/",.y,".csv", sep = ""))))
+ #     ~write.csv(.x, here::here(str_c("corr_mats/",.y,".csv", sep = ""))))
 ```
+
+Create clr-transformed matrices for 16S data (keep all the previous filters)
+
+```{r clr-16s}
+#Filter the otu tables with raw counts for prevalence and abundance
+otu_filt_list <- list(physeq_intersect,phy_genus, phy_family) %>% 
+  map(otu_table) %>% 
+  map2(otu_mat, ~ .x [rownames(.x) %in% colnames(.y)])
+#Apply clr transformation to the otu tables
+otu_filt_clr <- map(otu_filt_list, qiime2R::make_clr)
+#Check how the data look after transformation
+otu_filt_clr %>% 
+  map(rowMeans) %>% 
+  walk(hist)
+```
+
+
+```{r clr-16s-print, eval=FALSE}
+otu_filt_clr %>% 
+map(as.matrix) %>% 
+  map(t) %>% 
+walk2(c("Species_otu","Genus_otu", "Family_otu"),
+      ~write.csv(.x, here::here(str_c("corr_mats/clr",.y,".csv", sep = ""))))
+                      
+```
+
 
 
 
