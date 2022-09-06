@@ -1,0 +1,33 @@
+---
+title: "Spearman correlations for subsets of cohorts"
+output: html_notebook
+author: Zakhar Krekhno
+---
+
+```{r, echo=FALSE, include=FALSE}
+library(phyloseq)
+library(readxl)
+library(reshape2)
+library(psych)
+library(tidyverse)
+theme_set(theme_classic(base_size = 14))
+calc_relative_abund <- function(x) x/sum(x)
+```
+
+Import all the necessary matrices for analysis
+```{r import}
+files <- list.files(path = here::here("corr_mats/"))
+otu_file_list <- str_subset(files,"clr(.)+otu")
+tax_file_list <- str_subset(files,"tax")
+ms_file_list <- str_subset(files, "ms")
+#Import otu counts
+otu_list <- map(otu_file_list, 
+                    ~read_csv(file = here::here(str_c("corr_mats/",.))))
+otu_mat_list <- otu_list %>% 
+  map(column_to_rownames, var = "...1") %>% 
+  map(as.matrix)
+#Import MS data
+mq_mat <- read_csv(file = here::here(str_c("corr_mats/",ms_file_list))) %>% 
+  column_to_rownames(var = "...1") %>% 
+  as.matrix()
+```
