@@ -46,6 +46,17 @@ meta_list <-meta_list_starter %>%
        ~filter(.x, Tissue_type == .y)) %>% 
   map2(rep(c("Not_applicable","No","Yes"),times = 2), 
        ~filter(.x, Active_IBD == .y))
+#Name the list for convenience
+subgroups <- str_c(rep(c("Colon","Ileum"), each = 3),rep(c("Not_applicable","No","Yes"),times = 2), sep = "_")
+names(meta_list) <- subgroups
+```
+
+Make appropriate matrices for each group
+```{r subset_mq}
+mq_list <- map(vector(mode = "list", length = 6*3), ~ mq_mat) %>% 
+  map2(rep(meta_list, each=3), ~ .x [rownames(.x) %in% pull(.y,var = sample),])
+otu_filt_list <- rep(otu_mat_list, times = 6) %>% 
+  map2(rep(meta_list, each=3), ~ .x [rownames(.x) %in% pull(.y,var = sample),])
 ```
 
 
