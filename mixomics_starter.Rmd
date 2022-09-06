@@ -1,0 +1,20 @@
+---
+title: "Mixomics-DIABLO-starter"
+output: html_notebook
+author: Zakhar Krekhno
+---
+
+```{r, echo=FALSE, include=FALSE}
+library(phyloseq)
+library(mixOmics)
+library(readxl)
+library(reshape2)
+library(tidyverse)
+theme_set(theme_classic(base_size = 14))
+```
+
+
+```{r}
+
+```
+
