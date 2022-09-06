@@ -61,7 +61,7 @@ otu_filt_list <- rep(otu_mat_list, times = 6) %>%
 
 Run correlations 
 
-```{r spearman, warning=FALSE}
+```{r spearman, warning=FALSE, eval=FALSE}
 spear_BH_list <- map2(mq_list,otu_filt_list,
                      ~corr.test(x = .x, y = .y, use = "pairwise", method="spearman", adjust="BH", ci=FALSE))
 coef_list <- map2(rep(spear_BH_list,each=3),rep(c("r","p","p.adj"),times = 18), ~melt(.x [.y]))
@@ -79,7 +79,7 @@ names(df_list) <- dfs_names
 ```
 
 Finish with some filtering of results for ease of work
-```{r spearman-plot}
+```{r spearman-plot, eval=FALSE}
 #Filter the results to only include somewhat meaningful work
 df_filt_list <- df_list %>% 
   map(~filter(., value < 0.6))
@@ -87,3 +87,75 @@ df_filt_list <- df_list %>%
  #     ~write_csv(.x,here::here(str_c("spear_results/filtered",.y,"_cor.csv"))))
 
 ```
+
+Further filter the proteomics data to just include DE proteins between active/inactive IBD vs control in each group
+```{r select_top_prots}
+prot_da_res <- read_excel(here::here("All comparisons vsn-norm limma cut-off 0.5 robust.xlsx"))
+#Select proteins that were significantly DA in at least one comparison
+prot_da_interest <- prot_da_res %>% 
+  select(Gene,contains("adj")) %>% 
+  filter(if_any(contains("adj"), ~.<0.01))
+#Create the new mq_list
+mq_top_list <- map(vector(mode = "list", length = 6*3), ~ mq_mat [,colnames(mq_mat) %in% prot_da_interest$Gene]) %>% 
+  map2(rep(meta_list, each=3), ~ .x [rownames(.x) %in% pull(.y,var = sample),])
+```
+
+Run correlations on subset proteins
+
+```{r spearman_top_da, warning=FALSE, eval=FALSE}
+spear_top_list <- map2(mq_top_list,otu_filt_list,
+                     ~corr.test(x = .x, y = .y, use = "pairwise", method="spearman", adjust="BH", ci=FALSE))
+coef_top_list <- map2(rep(spear_top_list,each=3),rep(c("r","p","p.adj"),times = 18), ~melt(.x [.y]))
+
+rs_top_list <- coef_top_list [seq(from = 1, to = length(coef_top_list), by = 3)]
+ps_top_list <- coef_top_list [seq(from = 2, to = length(coef_top_list), by = 3)]
+padj_top_list <- coef_top_list [seq(from = 3, to = length(coef_top_list), by = 3)]
+
+df_top_list <- pmap(list(rs_top_list,ps_top_list,padj_top_list),
+               ~reduce(list(..1,..2,..3),left_join, by = c("Var1","Var2")))
+dfs_names <- str_c(rep(c("Family","Genus", "Species"), times = 6),rep(subgroups,each = 3), sep = "_")
+names(df_top_list) <- dfs_names
+#Filter the results to only include somewhat meaningful work
+df_top_filt_list <- df_top_list %>% 
+  map(~filter(., value < 0.1))
+df_top_cors <- df_top_filt_list %>% 
+   map(~arrange(.,value,desc(abs(as.numeric(value.x))))) %>% 
+  map(slice_head,n=1) %>% 
+  keep(~nrow(.)>0)
+#walk2(df_list, dfs_names,
+ #     ~write_csv(.x,here::here(str_c("spear_results_subset/",.y,"_cor.csv"))))
+```
+Plot scatter plots of top correlations
+
+```{r scatter-top}
+#Select just protein and otu as selected top correlation
+mq_select_list <- set_names(mq_list,nm=dfs_names) %>% 
+  keep(names(.) %in% names(df_top_cors)) %>% 
+  map2(df_top_cors, ~ .x [,colnames(.x) %in% pull(.y,var = "Var1")]) %>% 
+  map(as.data.frame)
+otu_select_list <- set_names(otu_filt_list,nm=dfs_names) %>% 
+  keep(names(.) %in% names(df_top_cors)) %>% 
+  map2(df_top_cors, ~ .x [,colnames(.x) %in% pull(.y,var = "Var2")]) %>% 
+  map(as.data.frame)
+#prepare list for scatter plots
+scatter_list <- map2(mq_select_list, otu_select_list, merge, by = 0)
+#prepare lists for names
+xlabs <- map_chr(df_top_cors, pull, var = "Var1")
+ylabs <- map_chr(df_top_cors, pull, var = "Var2")
+rcoefs <- map_chr(df_top_cors, pull, var = "value.x")
+pvals <- map_chr(df_top_cors, pull, var = "value")
+
+#pdf(here::here("spear_results_subset/Scatter plots of top correlations.pdf"))
+pwalk(list(scatter_list, xlabs,ylabs, rcoefs,pvals, names(scatter_list)), 
+      ~print(ggplot(..1, aes(x = `.x[[i]].x`, y = `.x[[i]].y`)) +
+               geom_point() +
+               geom_smooth(method = "lm") + 
+               labs(x = ..2, y = ..3, 
+                    subtitle = str_c("Spearman rho =",round(as.numeric(..4),2)," Adjusted p=",
+                                     format(as.numeric(..5),digits = 2, scientific = T)), title = ..6)
+             ))
+  
+#dev.off()
+```
+
+
