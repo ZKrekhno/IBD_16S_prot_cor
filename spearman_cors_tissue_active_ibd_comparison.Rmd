@@ -5,7 +5,6 @@ author: Zakhar Krekhno
 ---
 
 ```{r, echo=FALSE, include=FALSE}
-library(phyloseq)
 library(readxl)
 library(reshape2)
 library(psych)
@@ -53,10 +52,12 @@ names(meta_list) <- subgroups
 
 Make appropriate matrices for each group
 ```{r subset_mq}
+dfs_names <- str_c(rep(c("Family","Genus", "Species"), times = 6),rep(subgroups,each = 3), sep = "_")
 mq_list <- map(vector(mode = "list", length = 6*3), ~ mq_mat) %>% 
   map2(rep(meta_list, each=3), ~ .x [rownames(.x) %in% pull(.y,var = sample),])
 otu_filt_list <- rep(otu_mat_list, times = 6) %>% 
-  map2(rep(meta_list, each=3), ~ .x [rownames(.x) %in% pull(.y,var = sample),])
+  map2(rep(meta_list, each=3), ~ .x [pull(.y,var = sample),]) %>% 
+  set_names(nm=dfs_names)
 ```
 
 Run correlations 
@@ -97,7 +98,10 @@ prot_da_interest <- prot_da_res %>%
   filter(if_any(contains("adj"), ~.<0.01))
 #Create the new mq_list
 mq_top_list <- map(vector(mode = "list", length = 6*3), ~ mq_mat [,colnames(mq_mat) %in% prot_da_interest$Gene]) %>% 
-  map2(rep(meta_list, each=3), ~ .x [rownames(.x) %in% pull(.y,var = sample),])
+  map2(rep(meta_list, each=3), ~ .x [pull(.y,var = sample),]) %>% 
+  set_names(nm=dfs_names)
+#Ensure rows are in the same order for the matrices
+all(map2_lgl(otu_filt_list, mq_top_list, ~all(rownames(.x) == rownames(.y))))
 ```
 
 Run correlations on subset proteins
@@ -121,22 +125,26 @@ df_top_filt_list <- df_top_list %>%
 df_top_cors <- df_top_filt_list %>% 
    map(~arrange(.,value,desc(abs(as.numeric(value.x))))) %>% 
   map(slice_head,n=1) %>% 
-  keep(~nrow(.)>0)
-#walk2(df_list, dfs_names,
+  keep(~nrow(.)>0) %>% 
+  map(mutate, Var1 = as.character(Var1), Var2 = as.character(Var2))
+#walk2(df_top_list, dfs_names,
  #     ~write_csv(.x,here::here(str_c("spear_results_subset/",.y,"_cor.csv"))))
+#walk2(keep(df_top_filt_list, ~nrow(.)>0), keep(dfs_names, ~. %in% names(df_top_cors)),
+ #     ~write_csv(.x,here::here(str_c("spear_results_subset/filtered",.y,"_cor.csv"))))
 ```
+
 Plot scatter plots of top correlations
 
 ```{r scatter-top}
 #Select just protein and otu as selected top correlation
 mq_select_list <- set_names(mq_list,nm=dfs_names) %>% 
   keep(names(.) %in% names(df_top_cors)) %>% 
-  map2(df_top_cors, ~ .x [,colnames(.x) %in% pull(.y,var = "Var1")]) %>% 
-  map(as.data.frame)
+  map2(df_top_cors, ~ .x [,colnames(.x) %in% pull(.y,var = "Var1")]) %>%  
+  map(as.data.frame, stringsAsFactors = F)
 otu_select_list <- set_names(otu_filt_list,nm=dfs_names) %>% 
   keep(names(.) %in% names(df_top_cors)) %>% 
   map2(df_top_cors, ~ .x [,colnames(.x) %in% pull(.y,var = "Var2")]) %>% 
-  map(as.data.frame)
+  map(as.data.frame, stringsAsFactors = F)
 #prepare list for scatter plots
 scatter_list <- map2(mq_select_list, otu_select_list, merge, by = 0)
 #prepare lists for names
@@ -157,5 +165,48 @@ pwalk(list(scatter_list, xlabs,ylabs, rcoefs,pvals, names(scatter_list)),
   
 #dev.off()
 ```
+Plot bubble plots of Spearman correlations
+```{r spearman-plot-bubble}
+#Get taxonomy to assign meaningul names
+tax_list <- map(tax_file_list, 
+                    ~read_csv(file = here::here(str_c("corr_mats/",.))))
+#Add taxonomy information to each result
+df_tax_list <- map2(df_top_filt_list, rep(tax_list,times = 6),left_join, by = c("Var2" = "...1"))
+#Remove tables with no correlations passing the comparison
+df_tax_list_reduced <- keep(df_tax_list, ~nrow(.)>0)
+#Add more meaningful names to the taxonomic tables
+df_tax_final <- df_tax_list_reduced %>% 
+    modify_at(str_which(names(df_tax_list_reduced),"Family"),
+            ~mutate(., Family_true = case_when(
+              str_detect(Family, "uncultured") ~ str_c(Order,Family, sep = " "),
+              TRUE ~ Family
+            ))) %>% 
+  modify_at(str_which(names(df_tax_list_reduced),"Genus"),
+            ~mutate(., Genus_true = case_when(
+              str_detect(Genus, "uncultured") ~ str_c(Order,Family, Genus, sep = " "),
+              TRUE ~ Genus
+            ))) %>% 
+   modify_at(str_which(names(df_tax_list_reduced),"Species"),
+            ~mutate(., Species_true = case_when(
+              str_detect(str_replace_na(Species, replacement = "NA"), "(uncultured)|(NA)|(unidentified)") ~ 
+                str_c(str_replace_na(Order),str_replace_na(Family), str_replace_na(Genus), sep = " "),
+              TRUE ~ Species
+            )))
+#Get taxonomic ranks for plotting
+ranks <- str_remove(names(df_tax_list_reduced),"_.+") %>% 
+  str_c(., "_true")
+df_tax_final <- df_tax_final %>% 
+  modify_at(4, filter, value < 0.08)
 
+#pdf(here::here("spear_results_subset/subset Spearman correlations clr-16S.pdf"), height = 12, width = 15)
+pwalk(list(df_tax_final,ranks, names(df_tax_final)),
+      ~print(ggplot(..1, aes_(x=quote(Var1), y=as.name(..2))) +
+              geom_point(aes(color = value.x, fill = value.x, size = value), alpha = 0.6, shape = 21) +
+              scale_fill_distiller(name = "Spearman rho",palette = "PuOr", breaks = c(-0.6,-0.4,-0.2,0,0.2,0.4,0.6)) +
+              scale_color_distiller(name = "Spearman rho", palette = "PuOr",breaks = c(-0.6,-0.4,-0.2,0,0.2,0.4,0.6)) +
+              scale_size(name = "Adjusted p",trans = 'reverse') +
+              labs(x=element_blank(), title = ..3, subtitle = "Yes means active IBD, No means inactive,\nNot applicable is control") +
+              theme_bw(base_size = 12) + theme(axis.text.x = element_text(angle = 45, hjust = 0.9))))
+#dev.off()
+```
 
