@@ -1,0 +1,159 @@
+---
+title: "Spearman viz after analysis for subsets of cohorts"
+output: html_notebook
+author: Zakhar Krekhno
+---
+
+```{r, echo=FALSE, include=FALSE}
+library(phyloseq)
+library(readxl)
+library(reshape2)
+library(psych)
+library(tidyverse)
+theme_set(theme_classic(base_size = 14))
+```
+
+```{r import-cors}
+files <- list.files(path = here::here("corr_mats/"))
+tax_file_list <- str_subset(files,"tax")
+subgroups <- str_c(rep(c("Colon","Ileum"), each = 3),rep(c("Not_applicable","No","Yes"),times = 2), sep = "_")
+dfs_names <- str_c(rep(c("Family","Genus", "Species"), times = 6),rep(subgroups,each = 3), sep = "_")
+cors_list <- map(dfs_names,
+      ~read_csv(here::here(str_c("spear_results/filtered",.x,"_cor.csv"))))
+names(cors_list) <- dfs_names
+```
+
+Plot results of the correlation test
+```{r spearman-plot}
+#Filter the results to only include somewhat meaningful work
+df_filt_list <- cors_list %>% 
+  map(~filter(.,abs(as.numeric(value.x)) > 0.3, value.y < 0.05, value < 0.1))
+#Get taxonomy to assign meaningul names
+tax_list <- map(tax_file_list, 
+                    ~read_csv(file = here::here(str_c("corr_mats/",.))))
+#Add taxonomy information to each result
+df_tax_list <- map2(df_filt_list, rep(tax_list,times = 6),left_join, by = c("Var2" = "...1"))
+#Remove tables with no correlations passing the comparison
+df_tax_list_reduced <- keep(df_tax_list, ~nrow(.)>0)
+#Add more meaningful names to the taxonomic tables
+df_tax_final <- df_tax_list_reduced %>% 
+    modify_at(str_which(names(df_tax_list_reduced),"Family"),
+            ~mutate(., Family_true = case_when(
+              str_detect(Family, "uncultured") ~ str_c(Order,Family, sep = " "),
+              TRUE ~ Family
+            ))) %>% 
+  modify_at(str_which(names(df_tax_list_reduced),"Genus"),
+            ~mutate(., Genus_true = case_when(
+              str_detect(Genus, "uncultured") ~ str_c(Order,Family, Genus, sep = " "),
+              TRUE ~ Genus
+            ))) %>% 
+   modify_at(str_which(names(df_tax_list_reduced),"Species"),
+            ~mutate(., Species_true = case_when(
+              str_detect(str_replace_na(Species, replacement = "NA"), "(uncultured)|(NA)|(unidentified)") ~ 
+                str_c(str_replace_na(Order),str_replace_na(Family), str_replace_na(Genus), sep = " "),
+              TRUE ~ Species
+            )))
+#Get taxonomic ranks for plotting
+ranks <- str_remove(names(df_tax_list_reduced),"_.+") %>% 
+  str_c(., "_true")
+df_tax_final <- df_tax_final %>% 
+  modify_at(3, ~filter(., value < 0.08)) 
+  
+#pdf(here::here("spear_results_subset/subset Spearman correlations clr-16S.pdf"), height = 12, width = 15)
+pwalk(list(df_tax_final,ranks, names(df_tax_final)),
+      ~print(ggplot(..1, aes_(x=quote(Var1), y=as.name(..2))) +
+              geom_point(aes(color = value.x, fill = value.x, size = value), alpha = 0.6, shape = 21) +
+              scale_fill_distiller(name = "Spearman rho",palette = "PuOr") +
+              scale_color_distiller(name = "Spearman rho", palette = "PuOr") +
+              scale_size(name = "Adjusted p",trans = 'reverse') +
+              labs(x=element_blank(), title = ..3, subtitle = "Yes means active IBD, No means inactive,\nNot applicable is control") +
+              theme_bw(base_size = 10) + theme(axis.text.x = element_text(angle = 45, hjust = 0.9))))
+#dev.off()
+```
+Plot some of the correlations as scatter plots
+```{r select_top}
+df_top_cors <- df_tax_final %>% 
+  map(~arrange(.,value,desc(abs(as.numeric(value.x))))) %>% 
+  map(slice_head,n=1)
+```
+
+Import all the necessary matrices for analysis
+```{r import}
+files <- list.files(path = here::here("corr_mats/"))
+otu_file_list <- str_subset(files,"clr(.)+otu")
+tax_file_list <- str_subset(files,"tax")
+ms_file_list <- str_subset(files, "ms")
+#Import otu counts
+otu_list <- map(otu_file_list, 
+                    ~read_csv(file = here::here(str_c("corr_mats/",.))))
+otu_mat_list <- otu_list %>% 
+  map(column_to_rownames, var = "...1") %>% 
+  map(as.matrix)
+#Import MS data
+mq_mat <- read_csv(file = here::here(str_c("corr_mats/",ms_file_list))) %>% 
+  column_to_rownames(var = "...1") %>% 
+  as.matrix()
+```
+Import the metadata and create sub-divided matrices.
+We will be doing correlations within just Ileum or Colon and within noIBD, active, or inactive IBD
+```{r import-meta}
+meta_full <- read_excel(here::here("Metadata.xlsx")) %>% 
+  select("sample" = `#SampleID`, "group" = Group, everything()) %>% 
+  mutate(sample = str_remove(sample, "Rep")) %>% 
+  filter(sample %in% rownames(mq_mat)) %>% 
+  mutate(across(matches("(Active)|(TI_resection)|(Cholestyramine)"), ~as.character(fct_recode(as_factor(.x), 
+                                                Yes = "1", No = "0", Not_applicable = "NA"))))
+#Prepare metadata tables
+meta_list_starter <- map(vector(mode = "list", length = 6), ~ meta_full)
+meta_list <-meta_list_starter %>% 
+  map2(rep(c("Colon","Ileum"), each = 3), 
+       ~filter(.x, Tissue_type == .y)) %>% 
+  map2(rep(c("Not_applicable","No","Yes"),times = 2), 
+       ~filter(.x, Active_IBD == .y))
+#Name the list for convenience
+subgroups <- str_c(rep(c("Colon","Ileum"), each = 3),rep(c("Not_applicable","No","Yes"),times = 2), sep = "_")
+names(meta_list) <- subgroups
+```
+
+Make appropriate matrices for each group
+```{r subset_mq}
+mq_list <- map(vector(mode = "list", length = 6*3), ~ mq_mat) %>% 
+  map2(rep(meta_list, each=3), ~ .x [rownames(.x) %in% pull(.y,var = sample),]) %>% 
+  set_names(nm = dfs_names)
+otu_filt_list <- rep(otu_mat_list, times = 6) %>% 
+  map2(rep(meta_list, each=3), ~ .x [rownames(.x) %in% pull(.y,var = sample),]) %>% 
+  set_names(nm = dfs_names)
+#Select just protein and otu as selected top correlation
+mq_select_list <- mq_list %>% 
+  keep(names(.) %in% names(df_top_cors)) %>% 
+  map2(df_top_cors, ~ .x [,colnames(.x) %in% pull(.y,var = "Var1")]) %>% 
+  map(as.data.frame)
+otu_select_list <- otu_filt_list %>% 
+  keep(names(.) %in% names(df_top_cors)) %>% 
+  map2(df_top_cors, ~ .x [,colnames(.x) %in% pull(.y,var = "Var2")]) %>% 
+  map(as.data.frame)
+#prepare list for scatter plots
+scatter_list <- map2(mq_select_list, otu_select_list, merge, by = 0) %>% 
+  map2(df_top_cors, rename)
+#prepare lists for names
+xlabs <- map_chr(df_top_cors, pull, var = "Var1")
+ylabs <- map_chr(df_top_cors, pull, var = "Var2")
+rcoefs <- map_chr(df_top_cors, pull, var = "value.x")
+pvals <- map_chr(df_top_cors, pull, var = "value")
+
+#pdf(here::here("spear_results_subset/Scatter plots of top correlations.pdf"))
+pwalk(list(scatter_list, xlabs,ylabs, rcoefs,pvals, names(scatter_list)), 
+      ~print(ggplot(..1, aes(x = `.x[[i]].x`, y = `.x[[i]].y`)) +
+               geom_point() +
+               geom_smooth(method = "lm") + 
+               labs(x = ..2, y = ..3, 
+                    subtitle = str_c("Spearman rho =",round(as.numeric(..4),2)," Adjusted p=",
+                                     format(as.numeric(..5),digits = 2, scientific = T)), title = ..6)
+             ))
+  
+#dev.off()
+```
+The end result of this: it seems that these correlations are not very strong, and likely instead artifacts of analysis.
+
+
+
