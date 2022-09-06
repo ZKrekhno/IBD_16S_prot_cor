@@ -129,8 +129,7 @@ df_top_cors <- df_top_filt_list %>%
   map(mutate, Var1 = as.character(Var1), Var2 = as.character(Var2))
 #walk2(df_top_list, dfs_names,
  #     ~write_csv(.x,here::here(str_c("spear_results_subset/",.y,"_cor.csv"))))
-#walk2(keep(df_top_filt_list, ~nrow(.)>0), keep(dfs_names, ~. %in% names(df_top_cors)),
- #     ~write_csv(.x,here::here(str_c("spear_results_subset/filtered",.y,"_cor.csv"))))
+
 ```
 
 Plot scatter plots of top correlations
@@ -174,6 +173,9 @@ tax_list <- map(tax_file_list,
 df_tax_list <- map2(df_top_filt_list, rep(tax_list,times = 6),left_join, by = c("Var2" = "...1"))
 #Remove tables with no correlations passing the comparison
 df_tax_list_reduced <- keep(df_tax_list, ~nrow(.)>0)
+#Export filtered correlation tables
+#walk2(df_tax_list_reduced, names(df_tax_list_reduced),
+ #     ~write_csv(.x,here::here(str_c("spear_results_subset/filtered",.y,"_cor_tax.csv"))))
 #Add more meaningful names to the taxonomic tables
 df_tax_final <- df_tax_list_reduced %>% 
     modify_at(str_which(names(df_tax_list_reduced),"Family"),
