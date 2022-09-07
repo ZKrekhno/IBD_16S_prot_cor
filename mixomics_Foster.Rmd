@@ -11,3 +11,88 @@ library(reshape2)
 library(tidyverse)
 theme_set(theme_classic(base_size = 14))
 ```
+
+Import all the necessary matrices for analysis
+```{r import}
+files <- list.files(path = here::here("corr_mats/"))
+otu_file_list <- str_subset(files,"clr(.)+otu")
+tax_file_list <- str_subset(files,"tax")
+ms_file_list <- str_subset(files, "ms")
+#Import otu counts
+otu_list <- map(otu_file_list, 
+                    ~read_csv(file = here::here(str_c("corr_mats/",.))))
+otu_mat_list <- otu_list %>% 
+  map(column_to_rownames, var = "...1") %>% 
+  map(as.matrix)
+#Import MS data
+mq_mat <- read_csv(file = here::here(str_c("corr_mats/",ms_file_list))) %>% 
+  column_to_rownames(var = "...1") %>% 
+  as.matrix()
+```
+
+Import the metadata and create sub-divided matrices.
+We will be doing correlations within just Ileum or Colon and within noIBD, active, or inactive IBD
+```{r import-meta}
+meta_full <- read_excel(here::here("Metadata.xlsx")) %>% 
+  select("sample" = `#SampleID`, "group" = Group, everything()) %>% 
+  mutate(sample = str_remove(sample, "Rep")) %>% 
+  filter(sample %in% rownames(mq_mat)) %>% 
+  mutate(across(matches("(Active)|(TI_resection)|(Cholestyramine)"), ~as.character(fct_recode(as_factor(.x), 
+                                                Yes = "1", No = "0", Not_applicable = "NA"))))
+#Prepare metadata tables
+meta_list_starter <- map(vector(mode = "list", length = 2), ~ meta_full)
+meta_list <-meta_list_starter %>% 
+  map2(rep(c("Colon","Ileum"), each = 1), 
+       ~filter(.x, Tissue_type == .y)) 
+#Name the list for convenience
+names(meta_list) <- c("Colon","Ileum")
+```
+
+Make appropriate matrices for each group
+```{r subset_mq}
+dfs_names <- str_c(rep(c("Family","Genus", "Species"), times = 2),rep(names(meta_list),each = 3), sep = "_")
+otu_filt_list <- rep(otu_mat_list, times = length(meta_list)) %>% 
+  map2(rep(meta_list, each = length(dfs_names)/length(meta_list)), ~ .x [pull(.y,var = sample),]) %>% 
+  set_names(nm=dfs_names)
+```
+
+Further filter the proteomics data to just include DE proteins between active/inactive IBD vs control in each group
+```{r select_top_prots}
+#Import the results
+da_res <- map(list.files(here::here("spear_subset_on_Foster"), pattern = "full_"),
+              ~read_csv( file = here::here(str_c("spear_subset_on_Foster/",.)))) 
+da_res <- set_names(da_res, nm = list.files(here::here("spear_subset_on_Foster"), pattern = "full_"))
+#Reduce the results to one table, and filter afterwards
+da_res_interest <- da_res %>% 
+  reduce(left_join, by = c("gene.name","first.id")) %>% 
+  select(gene.name,first.id, contains("padj"), -contains("grand")) %>% 
+  filter(if_any(contains("adj"), ~.<0.01))
+#Get the protein names to select
+da_prots <- da_res_interest %>% 
+  select(gene.name) %>% 
+  separate(gene.name, into = letters [1:20], sep = " ") %>% 
+  pivot_longer(letters [2:20], names_to = "letters", values_to = "secondary_names")
+da_prots_final <- c(da_prots$a,da_prots$secondary_names) %>% 
+  . [!is.na(.)] %>% 
+  str_remove_all(";")
+
+#Create the new mq_list
+mq_top_list <- map(vector(mode = "list", length = length(dfs_names)), ~ mq_mat [,colnames(mq_mat) %in% da_prots_final]) %>% 
+  map2(rep(meta_list, each=length(dfs_names)/length(meta_list)), ~ .x [pull(.y,var = sample),]) %>% 
+  set_names(nm=dfs_names)
+#Ensure rows are in the same order for the matrices
+all(map2_lgl(otu_filt_list, mq_top_list, ~all(rownames(.x) == rownames(.y))))
+```
+Do not run DIABLO on species level data, prepare the matrices for DIABLO
+```{r diablo-prep}
+#Create a factor for separation based on ActiveIBD status
+Y_list <- meta_list %>% 
+  map(pull,Active_IBD) %>% 
+  map(as_factor)
+#Create list of matrices
+X_list <- list(keep(mq_top_list, str_detect(names(mq_top_list), "Species", negate = T)),
+                 keep(otu_filt_list, str_detect(names(mq_top_list), "Species", negate = T))) %>% 
+  transpose() %>% 
+  modify_depth(1, ~set_names(., nm = c("protein","microbiome")))
+```
+
