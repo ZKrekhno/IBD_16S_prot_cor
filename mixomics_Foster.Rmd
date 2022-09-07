@@ -96,3 +96,17 @@ X_list <- list(keep(mq_top_list, str_detect(names(mq_top_list), "Species", negat
   modify_depth(1, ~set_names(., nm = c("protein","microbiome")))
 ```
 
+Run diablo analysis
+```{r diablo-analysis}
+#Run starter DIABLO
+res.dblo <- block.splsda(X_list [[1]], Y_list [[1]])
+plotIndiv(res.dblo, ind.names = TRUE, 
+          legend=TRUE, cex=c(1,2,3))
+plotVar(res.dblo, var.names = c(F, T),
+        legend=TRUE, cutoff = 0.7)
+plotLoadings(res.dblo, comp = 1, contrib = "max")
+cimDiablo(res.dblo, color.blocks = c('darkorchid', 'lightgreen'), comp = 1, margin=c(8,20), legend.position = "right")
+network(res.dblo, cutoff = 0.6)
+```
+
+
