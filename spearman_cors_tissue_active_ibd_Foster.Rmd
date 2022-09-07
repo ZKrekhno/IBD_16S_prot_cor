@@ -1,5 +1,5 @@
 ---
-title: "Spearman correlations for subsets of cohorts"
+title: "Spearman analysis - Foster bioinfo filtering"
 output: html_notebook
 author: Zakhar Krekhno
 ---
@@ -29,6 +29,7 @@ mq_mat <- read_csv(file = here::here(str_c("corr_mats/",ms_file_list))) %>%
   column_to_rownames(var = "...1") %>% 
   as.matrix()
 ```
+
 Import the metadata and create sub-divided matrices.
 We will be doing correlations within just Ileum or Colon and within noIBD, active, or inactive IBD
 ```{r import-meta}
@@ -63,44 +64,28 @@ otu_filt_list <- rep(otu_mat_list, times = 6) %>%
 all(map2_lgl(otu_filt_list, mq_list, ~all(rownames(.x) == rownames(.y))))
 ```
 
-Run correlations 
-
-```{r spearman, warning=FALSE, eval=FALSE}
-spear_BH_list <- map2(mq_list,otu_filt_list,
-                     ~corr.test(x = .x, y = .y, use = "pairwise", method="spearman", adjust="BH", ci=FALSE))
-coef_list <- map2(rep(spear_BH_list,each=3),rep(c("r","p","p.adj"),times = 18), ~melt(.x [.y]))
-
-rs_list <- coef_list [seq(from = 1, to = length(coef_list), by = 3)]
-ps_list <- coef_list [seq(from = 2, to = length(coef_list), by = 3)]
-padj_list <- coef_list [seq(from = 3, to = length(coef_list), by = 3)]
-
-df_list <- pmap(list(rs_list,ps_list,padj_list),
-               ~reduce(list(..1,..2,..3),left_join, by = c("Var1","Var2")))
-dfs_names <- str_c(rep(c("Family","Genus", "Species"), times = 6),rep(subgroups,each = 3), sep = "_")
-names(df_list) <- dfs_names
-#walk2(df_list, dfs_names,
- #     ~write_csv(.x,here::here(str_c("spear_results_subset/",.y,"_cor.csv"))))
-```
-
-Finish with some filtering of results for ease of work
-```{r spearman-plot, eval=FALSE}
-#Filter the results to only include somewhat meaningful work
-df_filt_list <- df_list %>% 
-  map(~filter(., value < 0.6))
-#walk2(df_filt_list, dfs_names,
- #     ~write_csv(.x,here::here(str_c("spear_results/filtered",.y,"_cor.csv"))))
-
-```
-
 Further filter the proteomics data to just include DE proteins between active/inactive IBD vs control in each group
 ```{r select_top_prots}
-prot_da_res <- read_excel(here::here("All comparisons vsn-norm limma cut-off 0.5 robust.xlsx"))
-#Select proteins that were significantly DA in at least one comparison
-prot_da_interest <- prot_da_res %>% 
-  select(Gene,contains("adj")) %>% 
+#Import the results
+da_res <- map(list.files(here::here("spear_subset_on_Foster")),
+              ~read_csv( file = here::here(str_c("spear_subset_on_Foster/",.)))) 
+da_res <- set_names(da_res, nm = list.files(here::here("spear_subset_on_Foster")))
+#Reduce the results to one table, and filter afterwards
+da_res_interest <- da_res %>% 
+  reduce(left_join, by = c("gene.name","first.id")) %>% 
+  select(gene.name,first.id, contains("padj"), -contains("grand")) %>% 
   filter(if_any(contains("adj"), ~.<0.01))
+#Get the protein names to select
+da_prots <- da_res_interest %>% 
+  select(gene.name) %>% 
+  separate(gene.name, into = letters [1:20], sep = " ") %>% 
+  pivot_longer(letters [2:20], names_to = "letters", values_to = "secondary_names")
+da_prots_final <- c(da_prots$a,da_prots$secondary_names) %>% 
+  . [!is.na(.)] %>% 
+  str_remove_all(";")
+
 #Create the new mq_list
-mq_top_list <- map(vector(mode = "list", length = 6*3), ~ mq_mat [,colnames(mq_mat) %in% prot_da_interest$Gene]) %>% 
+mq_top_list <- map(vector(mode = "list", length = 6*3), ~ mq_mat [,colnames(mq_mat) %in% da_prots_final]) %>% 
   map2(rep(meta_list, each=3), ~ .x [pull(.y,var = sample),]) %>% 
   set_names(nm=dfs_names)
 #Ensure rows are in the same order for the matrices
@@ -131,7 +116,7 @@ df_top_cors <- df_top_filt_list %>%
   keep(~nrow(.)>0) %>% 
   map(mutate, Var1 = as.character(Var1), Var2 = as.character(Var2))
 #walk2(df_top_list, dfs_names,
- #     ~write_csv(.x,here::here(str_c("spear_results_subset/",.y,"_cor.csv"))))
+ #     ~write_csv(.x,here::here(str_c("spear_subset_on_Foster/",.y,"_Foster.csv"))))
 
 ```
 
@@ -155,7 +140,7 @@ ylabs <- map_chr(df_top_cors, pull, var = "Var2")
 rcoefs <- map_chr(df_top_cors, pull, var = "value.x")
 pvals <- map_chr(df_top_cors, pull, var = "value")
 
-#pdf(here::here("spear_results_subset/Scatter plots of top correlations.pdf"))
+#pdf(here::here("spear_subset_on_Foster/Scatter plots of top correlations.pdf"))
 pwalk(list(scatter_list, xlabs,ylabs, rcoefs,pvals, names(scatter_list)), 
       ~print(ggplot(..1, aes(x = `.x[[i]].x`, y = `.x[[i]].y`)) +
                geom_point() +
@@ -178,7 +163,7 @@ df_tax_list <- map2(df_top_filt_list, rep(tax_list,times = 6),left_join, by = c(
 df_tax_list_reduced <- keep(df_tax_list, ~nrow(.)>0)
 #Export filtered correlation tables
 #walk2(df_tax_list_reduced, names(df_tax_list_reduced),
- #     ~write_csv(.x,here::here(str_c("spear_results_subset/filtered",.y,"_cor_tax.csv"))))
+ #     ~write_csv(.x,here::here(str_c("spear_subset_on_Foster/filtered",.y,"_cor_tax.csv"))))
 #Add more meaningful names to the taxonomic tables
 df_tax_final <- df_tax_list_reduced %>% 
     modify_at(str_which(names(df_tax_list_reduced),"Family"),
@@ -200,10 +185,8 @@ df_tax_final <- df_tax_list_reduced %>%
 #Get taxonomic ranks for plotting
 ranks <- str_remove(names(df_tax_list_reduced),"_.+") %>% 
   str_c(., "_true")
-df_tax_final <- df_tax_final %>% 
-  modify_at(4, filter, value < 0.08)
 
-#pdf(here::here("spear_results_subset/subset Spearman correlations clr-16S.pdf"), height = 12, width = 15)
+#pdf(here::here("spear_subset_on_Foster/subset Spearman correlations clr-16S.pdf"), height = 12, width = 15)
 pwalk(list(df_tax_final,ranks, names(df_tax_final)),
       ~print(ggplot(..1, aes_(x=quote(Var1), y=as.name(..2))) +
               geom_point(aes(color = value.x, fill = value.x, size = value), alpha = 0.6, shape = 21) +
@@ -214,4 +197,3 @@ pwalk(list(df_tax_final,ranks, names(df_tax_final)),
               theme_bw(base_size = 12) + theme(axis.text.x = element_text(angle = 45, hjust = 0.9))))
 #dev.off()
 ```
-
