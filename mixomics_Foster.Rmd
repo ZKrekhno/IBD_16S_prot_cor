@@ -186,4 +186,14 @@ for (i in seq_along(res.dblo)) {
 }
 ```
 
+```{r auroc}
+auroc_list <- list(rep(res.dblo, each = 2),
+                   rep(names(res.dblo), each = 2),
+                   rep(c("protein","microbiome"), times = length(res.dblo)))
+#pdf(here::here(str_c("mixomics_res/AUC_ROC.pdf")))
+pwalk(auroc_list,
+      ~auroc(..1, roc.block = ..3, roc.comp = 2, title = str_c("ROC AUC for ",..2, " on ", ..3)))
+#dev.off()
+```
+
 
