@@ -89,6 +89,7 @@ Do not run DIABLO on species level data, prepare the matrices for DIABLO
 Y_list <- meta_list %>% 
   map(pull,Active_IBD) %>% 
   map(as_factor) %>% 
+  map(fct_relevel, "Not_applicable", "No", "Yes") %>% 
   rep(each=2)
 #Create list of matrices
 X_list <- list(keep(mq_top_list, str_detect(names(mq_top_list), "Species", negate = T)),
@@ -102,7 +103,8 @@ Run diablo analysis
 #Run starter DIABLO
 res.dblo <- map2(X_list, Y_list, block.splsda)
 walk2(res.dblo, names(res.dblo),~plotIndiv(.x, ind.names = TRUE, 
-          legend=TRUE, title = .y))
+          legend=TRUE, title = .y, 
+          col.per.group = c("grey69","orange", "brown")))
 plotVar(res.dblo, var.names = c(F, T),
         legend=TRUE, cutoff = 0.7)
 plotLoadings(res.dblo, comp = 1, contrib = "max")
