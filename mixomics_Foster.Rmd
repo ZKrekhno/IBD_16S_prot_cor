@@ -136,13 +136,54 @@ walk2(res.dblo, names(res.dblo),~plotIndiv(.x, ind.names = F,
           col.per.group = c("grey69","orange", "brown"),
           ellipse=F))
 #dev.off()
-walk2(res.dblo, names(res.dblo), 
-      ~plotVar(.x, var.names = c(T, T),
-        legend=TRUE, cutoff = 0.65, cex = c(2.5,2.5), col = c("cornflowerblue","firebrick3"),
-        title = str_c(.y," Correlation Circle Plot")))
-plotLoadings(res.dblo, comp = 1, contrib = "max")
-cimDiablo(res.dblo, color.blocks = c('darkorchid', 'lightgreen'), comp = 1, margin=c(8,20), legend.position = "right")
-network(res.dblo, cutoff = 0.6)
+```
+
+
+```{r diablo-analysis-2, fig.width=8, fig.height=6}
+#pdf(here::here("mixomics_res/Correlation circles.pdf"), width = 8, height = 6)
+cutoff <- rep(c(0.65, 0.65), each = 2)
+pwalk(list(res.dblo, names(res.dblo),cutoff), 
+      ~plotVar(..1, var.names = c(T, T),
+        legend=TRUE, cutoff = ..3, cex = c(1.5,1.5), col = c("cornflowerblue","firebrick3"),
+        title = str_c(..2," Correlation Circle Plot\nCut-off of ",..3)))
+#dev.off()
+```
+
+
+```{r diablo-analysis-loadings, fig.width=9, fig.height=6}
+loadings_plot_list <- list(rep(res.dblo, each = 2),
+                           rep(names(res.dblo), each = 2),
+                           rep(c(1,2), times = length(res.dblo)))
+#pdf(here::here("mixomics_res/Loadings plots.pdf"), width = 9, height = 6)
+pwalk(loadings_plot_list, 
+      ~plotLoadings(..1, comp = ..3, contrib = "max", ndisplay = 10, 
+                     legend.color = c("grey69","orange", "brown"),
+                     title = ..2, size.name = 1.2, size.legend = 1.2))
+#dev.off()
+```
+
+
+```{r diablo-cim, fig.width=8, fig.height=7, eval=FALSE}
+cutoff <- 0.65
+for (i in seq_along(res.dblo)) {
+  plot.new()
+  cimDiablo(res.dblo [[i]], color.blocks = c("cornflowerblue","firebrick3"), 
+          comp = c(1,2), margin=c(8,20), legend.position = "right", color.Y = c("grey69","orange", "brown"), 
+          title =  names(res.dblo) [[i]],
+          cutoff = cutoff, save = "png", 
+          name.save = here::here(str_c("mixomics_res/", names(res.dblo) [[i]],"_Cim")))
+}
+```
+
+
+```{r diablo-network, fig.width=8, fig.height=7, eval=FALSE}
+cutoff <- 0.6
+for (i in seq_along(res.dblo)) {
+  network(res.dblo [[i]], cutoff = cutoff, 
+        color.node = c("lightblue","indianred1"), shape.node = c('circle','circle'),
+        alpha.node = 0.5, symkey = T, interactive = F, save = "png",
+        name.save = here::here(str_c("mixomics_res/", names(res.dblo) [[i]],"_Network")))
+}
 ```
 
 
