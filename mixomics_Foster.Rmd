@@ -48,12 +48,40 @@ meta_list <-meta_list_starter %>%
 names(meta_list) <- c("Colon","Ileum")
 ```
 
-Make appropriate matrices for each group
+Make appropriate matrices for each group.
+Add taxonomy to otu matrices instead of feature IDs
 ```{r subset_mq}
 dfs_names <- str_c(rep(c("Family","Genus", "Species"), times = 2),rep(names(meta_list),each = 3), sep = "_")
 otu_filt_list <- rep(otu_mat_list, times = length(meta_list)) %>% 
   map2(rep(meta_list, each = length(dfs_names)/length(meta_list)), ~ .x [pull(.y,var = sample),]) %>% 
   set_names(nm=dfs_names)
+#Get taxonomy to assign meaningul names
+tax_list <- map(tax_file_list, 
+                    ~read_csv(file = here::here(str_c("corr_mats/",.))))
+#Add taxonomy information to each result
+otu_dfs <- otu_filt_list %>% 
+  map(t) %>% 
+  map(as_tibble, rownames = "feature")
+df_tax_list <- map2(otu_dfs, rep(tax_list,times = length(otu_dfs)/length(tax_list)),left_join, by = c("feature" = "...1"))
+df_better_names <-  df_tax_list %>% 
+  keep(str_detect(names(df_tax_list),"Species", negate = T))
+#Check if family and/or genus names are unique in the list
+map2(df_better_names, c("Family", "Genus","Family", "Genus"), ~any(duplicated(pull(.x,var = .y))))
+#None of the families are duplicated, but some genera are - check those
+idx_list <- map2(df_better_names, c("Family", "Genus","Family", "Genus"), ~which(duplicated(pull(.x,var = .y))))
+#They are just genus_uncultured, replace them with family instead
+df_fam_gen <- df_better_names %>% 
+  modify_if(str_detect(names(df_better_names),"Genus"), 
+            ~mutate(.x, Genus_better = case_when(
+              str_detect(Genus,"uncultured") ~ Family,
+              TRUE ~ Genus
+            )))
+#Create the new list of matrices
+otu_final_list <- df_fam_gen %>% 
+  map2(rep(c("Family","Genus_better"), times = 2), ~ column_to_rownames(.x, var = .y)) %>% 
+  map(select, -Kingdom, -Phylum, -Class, -Order,-matches("Family"), -Genus, -Species, - feature, -matches("Genus_better")) %>% 
+  map(t) %>% 
+  map(as.matrix)
 ```
 
 Further filter the proteomics data to just include DE proteins between active/inactive IBD vs control in each group
@@ -81,7 +109,7 @@ mq_top_list <- map(vector(mode = "list", length = length(dfs_names)), ~ mq_mat [
   map2(rep(meta_list, each=length(dfs_names)/length(meta_list)), ~ .x [pull(.y,var = sample),]) %>% 
   set_names(nm=dfs_names)
 #Ensure rows are in the same order for the matrices
-all(map2_lgl(otu_filt_list, mq_top_list, ~all(rownames(.x) == rownames(.y))))
+all(map2_lgl(otu_final_list, keep(mq_top_list, str_detect(names(mq_top_list), "Species", negate = T)), ~all(rownames(.x) == rownames(.y))))
 ```
 Do not run DIABLO on species level data, prepare the matrices for DIABLO
 ```{r diablo-prep}
@@ -93,7 +121,7 @@ Y_list <- meta_list %>%
   rep(each=2)
 #Create list of matrices
 X_list <- list(keep(mq_top_list, str_detect(names(mq_top_list), "Species", negate = T)),
-                 keep(otu_filt_list, str_detect(names(mq_top_list), "Species", negate = T))) %>% 
+                 otu_final_list) %>% 
   transpose() %>% 
   modify_depth(1, ~set_names(., nm = c("protein","microbiome")))
 ```
@@ -102,11 +130,16 @@ Run diablo analysis
 ```{r diablo-analysis}
 #Run starter DIABLO
 res.dblo <- map2(X_list, Y_list, block.splsda)
-walk2(res.dblo, names(res.dblo),~plotIndiv(.x, ind.names = TRUE, 
-          legend=TRUE, title = .y, 
-          col.per.group = c("grey69","orange", "brown")))
-plotVar(res.dblo, var.names = c(F, T),
-        legend=TRUE, cutoff = 0.7)
+#pdf(here::here("mixomics_res/PCA-like plot.pdf"))
+walk2(res.dblo, names(res.dblo),~plotIndiv(.x, ind.names = F, 
+          legend=TRUE, title = .y,
+          col.per.group = c("grey69","orange", "brown"),
+          ellipse=F))
+#dev.off()
+walk2(res.dblo, names(res.dblo), 
+      ~plotVar(.x, var.names = c(T, T),
+        legend=TRUE, cutoff = 0.65, cex = c(2.5,2.5), col = c("cornflowerblue","firebrick3"),
+        title = str_c(.y," Correlation Circle Plot")))
 plotLoadings(res.dblo, comp = 1, contrib = "max")
 cimDiablo(res.dblo, color.blocks = c('darkorchid', 'lightgreen'), comp = 1, margin=c(8,20), legend.position = "right")
 network(res.dblo, cutoff = 0.6)
