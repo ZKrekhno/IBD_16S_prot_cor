@@ -88,7 +88,8 @@ Do not run DIABLO on species level data, prepare the matrices for DIABLO
 #Create a factor for separation based on ActiveIBD status
 Y_list <- meta_list %>% 
   map(pull,Active_IBD) %>% 
-  map(as_factor)
+  map(as_factor) %>% 
+  rep(each=2)
 #Create list of matrices
 X_list <- list(keep(mq_top_list, str_detect(names(mq_top_list), "Species", negate = T)),
                  keep(otu_filt_list, str_detect(names(mq_top_list), "Species", negate = T))) %>% 
@@ -99,9 +100,9 @@ X_list <- list(keep(mq_top_list, str_detect(names(mq_top_list), "Species", negat
 Run diablo analysis
 ```{r diablo-analysis}
 #Run starter DIABLO
-res.dblo <- block.splsda(X_list [[1]], Y_list [[1]])
-plotIndiv(res.dblo, ind.names = TRUE, 
-          legend=TRUE, cex=c(1,2,3))
+res.dblo <- map2(X_list, Y_list, block.splsda)
+walk2(res.dblo, names(res.dblo),~plotIndiv(.x, ind.names = TRUE, 
+          legend=TRUE, title = .y))
 plotVar(res.dblo, var.names = c(F, T),
         legend=TRUE, cutoff = 0.7)
 plotLoadings(res.dblo, comp = 1, contrib = "max")
