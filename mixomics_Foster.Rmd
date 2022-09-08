@@ -184,6 +184,16 @@ for (i in seq_along(res.dblo)) {
         alpha.node = 0.5, symkey = T, interactive = F, save = "png",
         name.save = here::here(str_c("mixomics_res/", names(res.dblo) [[i]],"_Network")))
 }
+#This allows to get the matrix with Pearson-like coefficients between bacteria and proteins
+#Have to adjust the cut-off to detect anything for Entero
+cutoff <- 0.3
+a <- vector(mode = "list", length = 4)
+for (i in seq_along(res.dblo)) {
+  a [[i]] <- network(res.dblo [[i]], cutoff = cutoff, 
+        color.node = c("lightblue","indianred1"), shape.node = c('circle','circle'),
+        alpha.node = 0.5, symkey = T)
+}
+mat <- a [[4]] [[2]]
 ```
 
 ```{r auroc}
