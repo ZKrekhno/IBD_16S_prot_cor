@@ -173,7 +173,7 @@ pth_clr <- qiime2R::make_clr(pth_prev)
 pth_mat %>% t %>% rowMeans() %>% hist(main = "Untransformed pathways")
 pth_prev %>% t %>% rowMeans() %>% hist(main = "Prevalent pathways")
 pth_clr %>% t %>% rowMeans() %>% hist(main = "Prevalent clr pathways")
-#write.csv(pth_clr, here::here("corr_mats/clr_pth.csv"))
+#write.csv(t(pth_clr), here::here("corr_mats/clr_pth.csv"))
 ```
 
 
