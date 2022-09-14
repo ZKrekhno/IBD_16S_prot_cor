@@ -60,11 +60,10 @@ subgroups <- names(meta_list)
 ```
 
 Make appropriate matrices for each group
-```{r subset_mq}
-dfs_names <- str_c(rep(c("Family","Genus", "Species"), times = 6),rep(subgroups,each = 3), sep = "_")
-otu_filt_list <- rep(otu_mat_list, times = 6) %>% 
-  map2(rep(meta_list, each=3), ~ .x [pull(.y,var = sample),]) %>% 
-  set_names(nm=dfs_names)
+```{r subset_pth}
+pth_filt_list <- meta_list %>% 
+  map(~pth_mat_list [[1]]) %>% 
+  map2(meta_list, ~ .x [pull(.y,var = sample),]) 
 ```
 
 Further filter the proteomics data to just include DE proteins between active/inactive IBD vs control in each group
@@ -88,31 +87,10 @@ da_prots_final <- c(da_prots$a,da_prots$secondary_names) %>%
   str_remove_all(";")
 
 #Create the new mq_list
-mq_top_list <- map(vector(mode = "list", length = 6*3), ~ mq_mat [,colnames(mq_mat) %in% da_prots_final]) %>% 
-  map2(rep(meta_list, each=3), ~ .x [pull(.y,var = sample),]) %>% 
-  set_names(nm=dfs_names)
+mq_top_list <- map(meta_list, ~ mq_mat [,colnames(mq_mat) %in% da_prots_final]) %>% 
+  map2(meta_list, ~ .x [pull(.y,var = sample),]) 
 #Ensure rows are in the same order for the matrices
-all(map2_lgl(otu_filt_list, mq_top_list, ~all(rownames(.x) == rownames(.y))))
-```
-
-Filter OTUs to only include Enterobacteriacea
-
-```{r}
-#Import tax table
-tax <- read_csv(here::here("corr_mats/Species_tax.csv"))
-#Check that all features have taxonomy
-otu_filt_list %>% 
-  map_lgl(~all(colnames(.x) %in% tax$...1)) %>% 
-  all()
-#Filter the otu matrices to only include Entero features
-otu_entero_list <- otu_filt_list %>% 
-  map(~. [,colnames(.) %in% pull(filter(tax, Family == "f__Enterobacteriaceae"), var = "...1")])
-entero_features <- otu_filt_list %>% 
-  map(~ subset(colnames(.),colnames(.) %in% pull(filter(tax, Family == "f__Enterobacteriaceae"), var = "...1")))
-otu_entero_final <- keep(otu_entero_list, str_detect(names(otu_entero_list), "Species", negate = T))
-mq_top_final <- keep(mq_top_list, str_detect(names(mq_top_list), "Species", negate = T))
-#Ensure rows are in the same order for the matrices
-all(map2_lgl(otu_entero_final, mq_top_final, ~all(rownames(.x) == rownames(.y))))
+all(map2_lgl(pth_filt_list, mq_top_list, ~all(rownames(.x) == rownames(.y))))
 ```
 
 Run correlations on subset proteins
