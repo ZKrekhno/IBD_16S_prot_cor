@@ -93,10 +93,12 @@ mq_top_list <- map(meta_list, ~ mq_mat [,colnames(mq_mat) %in% da_prots_final]) 
 all(map2_lgl(pth_filt_list, mq_top_list, ~all(rownames(.x) == rownames(.y))))
 ```
 
+Filter OTUs to only include Enterobacteriacea
+
 Run correlations on subset proteins
 
 ```{r spearman_top_da, warning=FALSE, eval=FALSE}
-spear_top_list <- map2(mq_top_final,otu_entero_final,
+spear_top_list <- map2(mq_top_list,pth_filt_list,
                      ~corr.test(x = .x, y = .y, use = "pairwise", method="spearman", adjust="BH", ci=FALSE))
 coef_top_list <- map2(rep(spear_top_list,each=3),rep(c("r","p","p.adj"),times = length(spear_top_list)), ~melt(.x [.y]))
 
@@ -106,8 +108,7 @@ padj_top_list <- coef_top_list [seq(from = 3, to = length(coef_top_list), by = 3
 
 df_top_list <- pmap(list(rs_top_list,ps_top_list,padj_top_list),
                ~reduce(list(..1,..2,..3),left_join, by = c("Var1","Var2")))
-dfs_names <- str_c(rep(c("Family","Genus"), times = 6),rep(subgroups,each = 2), sep = "_")
-names(df_top_list) <- dfs_names
+names(df_top_list) <- names(meta_list)
 #Filter the results to only include somewhat meaningful work
 df_top_filt_list <- df_top_list %>% 
   map(~filter(., value < 0.05))
@@ -116,8 +117,9 @@ df_top_cors <- df_top_filt_list %>%
   map(slice_head,n=1) %>% 
   keep(~nrow(.)>0) %>% 
   map(mutate, Var1 = as.character(Var1), Var2 = as.character(Var2))
-#walk2(df_top_list, dfs_names,
- #     ~write_csv(.x,here::here(str_c("spear_entero/",.y,"_entero.csv"))))
+#Print out correlation results
+#walk2(df_top_list, names(ds_top_list),
+ #     ~write_csv(.x,here::here(str_c("spear_pathways/",.y,"_pth.csv"))))
 
 ```
 
@@ -125,26 +127,23 @@ Plot scatter plots of top correlations
 
 ```{r scatter-top}
 #Select just protein and otu as selected top correlation
-mq_select_list <- mq_top_final %>% 
+mq_select_list <- mq_top_list %>% 
   keep(names(.) %in% names(df_top_cors)) %>% 
   map2(df_top_cors, ~ .x [,colnames(.x) %in% pull(.y,var = "Var1")]) %>%  
   map(as.data.frame, stringsAsFactors = F)
-otu_select_list <- otu_entero_final %>% 
+pth_select_list <- pth_filt_list %>% 
   keep(names(.) %in% names(df_top_cors)) %>%  
+  map2(df_top_cors, ~ .x [,colnames(.x) %in% pull(.y,var = "Var2")]) %>%
   map(as.data.frame, stringsAsFactors = F)
 #prepare list for scatter plots
-scatter_list <- map2(mq_select_list, otu_select_list, merge, by = 0)
+scatter_list <- map2(mq_select_list, pth_select_list, merge, by = 0)
 #prepare lists for names
 xlabs <- map_chr(df_top_cors, pull, var = "Var1")
-ylabs <- map(vector(mode = "list", length = length(otu_select_list)), ~ tax) %>% 
-  map2(keep(entero_features, names(entero_features) %in% names(df_top_cors)),
-       ~filter(.x, `...1` == .y)) %>% 
-  map2(rep(c("Family","Genus"), times = 2), ~pull(.x, var = .y)) %>% 
-  flatten_chr()
+ylabs <- map_chr(df_top_cors, pull, var = "Var2")
 rcoefs <- map_chr(df_top_cors, pull, var = "value.x")
 pvals <- map_chr(df_top_cors, pull, var = "value")
 
-#pdf(here::here("spear_entero/Scatter plots of top correlations entero.pdf"))
+#pdf(here::here("spear_pathways/Scatter plots of top correlations for prevalent pathways.pdf"))
 pwalk(list(scatter_list, xlabs,ylabs, rcoefs,pvals, names(scatter_list)), 
       ~print(ggplot(..1, aes(x = `.x[[i]].x`, y = `.x[[i]].y`)) +
                geom_point() +
@@ -158,22 +157,22 @@ pwalk(list(scatter_list, xlabs,ylabs, rcoefs,pvals, names(scatter_list)),
 ```
 Plot bubble plots of Spearman correlations
 ```{r spearman-plot-bubble, fig.height=6, fig.width=8}
+#Only keep strong associations
 df_top_reduced <- keep(df_top_filt_list, ~nrow(.) > 0) %>% 
-  map2(ylabs, ~mutate(.x, Var2 = .y))
+  map(~filter(.,abs(value.x)>0.52, value < 0.05))
 
-#Get taxonomic ranks for plotting
-ranks <- str_remove(names(df_top_reduced),"_.+")
 
-#pdf(here::here("spear_entero/subset Entero Spearman correlations.pdf"), height = 6, width = 8)
-pwalk(list(df_top_reduced,ranks, names(df_top_reduced)),
-      ~print(ggplot(..1, aes_(x=quote(Var1), y=quote(Var2))) +
+
+#pdf(here::here("spear_pathways/Prevalent Pathway correlations.pdf"), height = 8, width = 10)
+walk2(df_top_reduced, names(df_top_reduced),
+      ~print(ggplot(.x, aes_(x=quote(Var1), y=quote(Var2))) +
               geom_point(aes(color = value.x, fill = value.x, size = value), alpha = 0.6, shape = 21) +
-              scale_fill_distiller(name = "Spearman rho",palette = "PuOr", breaks = c(-0.6,-0.4,-0.2,0,0.2,0.4,0.6)) +
-              scale_color_distiller(name = "Spearman rho", palette = "PuOr",breaks = c(-0.6,-0.4,-0.2,0,0.2,0.4,0.6)) +
+              scale_fill_distiller(name = "Spearman rho",palette = "PuOr", breaks = c(-0.5,0,0.5)) +
+              scale_color_distiller(name = "Spearman rho", palette = "PuOr",breaks = c(-0.5,0,0.5)) +
               scale_size(name = "Adjusted p",trans = 'reverse', range = c(5,8)) +
               labs(x=element_blank(), y=element_blank(),
-                   title = ..3, subtitle = "Yes means active IBD, No means inactive,\nNot applicable is control") +
-              theme_bw(base_size = 16) + theme(axis.text.x = element_text(angle = 45, hjust = 0.9))))
+                   title = .y) +
+              theme_bw(base_size = 12) + theme(axis.text.x = element_text(angle = 45, hjust = 0.9))))
 #dev.off()
 ```
 
