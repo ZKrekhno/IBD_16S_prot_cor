@@ -147,6 +147,35 @@ walk2(c("Species_otu","Genus_otu", "Family_otu"),
                       
 ```
 
+Prepare a table of picrust-pathways for correlation
+```{r picrust-pathway}
+pth <- read_tsv(here::here("picrust_res/pathway-table.tsv"), skip = 1)
+pth_mat <- pth %>%  
+  column_to_rownames(var = "#OTU ID") %>% 
+  as.matrix() 
+colnames(pth_mat) <- str_remove(colnames(pth_mat),"Rep")
+pth_mat <- pth_mat [,rownames(mq_mat)] 
+#Remove low prevalence pathways - expect prevalence in at least 30%
+pth_prevalence_filter <- pth_mat %>%
+  t() %>% 
+  as.data.frame() %>% 
+  mutate(across(everything(), ~.>0))
+pth_prev_sum <- pth_prevalence_filter %>% 
+  summarise(across(everything(), sum)) %>% 
+  mutate(across(everything(),~./ncol(pth_mat)))
+prevalent_pth <- pth_prev_sum %>% 
+  select(where(~.x >= 0.3)) %>% 
+  colnames()
+pth_prev <- pth_mat [prevalent_pth,]
+pth_clr <- qiime2R::make_clr(pth_prev)
+
+
+pth_mat %>% t %>% rowMeans() %>% hist(main = "Untransformed pathways")
+pth_prev %>% t %>% rowMeans() %>% hist(main = "Prevalent pathways")
+pth_clr %>% t %>% rowMeans() %>% hist(main = "Prevalent clr pathways")
+write.csv(pth_clr, here::here("corr_mats/clr_pth.csv"))
+```
+
 
 
 
