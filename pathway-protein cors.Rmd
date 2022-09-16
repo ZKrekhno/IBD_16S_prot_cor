@@ -15,7 +15,7 @@ theme_set(theme_classic(base_size = 14))
 Import all the necessary matrices for analysis
 ```{r import}
 files <- list.files(path = here::here("corr_mats/"))
-pth_file_list <- str_subset(files,"clr(.)+pth")
+pth_file_list <- str_subset(files,"clr(.)+pth.csv")
 ms_file_list <- str_subset(files, "ms")
 #Import pathway counts
 pth_list <- map(pth_file_list, 
