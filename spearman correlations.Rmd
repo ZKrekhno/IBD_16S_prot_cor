@@ -144,7 +144,21 @@ map(as.matrix) %>%
   map(t) %>% 
 walk2(c("Species_otu","Genus_otu", "Family_otu"),
       ~write.csv(.x, here::here(str_c("corr_mats/clr",.y,".csv", sep = ""))))
-                      
+```
+
+Create a matrix of just DA families
+
+```{r clr-16s-DA-family-print, eval=FALSE}
+otu_da <- read.csv(here::here("16S_res/Top hits triple DA.csv"))
+otu_family <- otu_filt_clr [[3]] 
+family_tax <- read.csv(here::here("corr_mats/Family_tax.csv"))
+family_tax_da <- family_tax %>% 
+  filter(Family %in% otu_da$Family) %>% 
+  select(Family, X) %>% 
+  deframe()
+otu_da_family <- otu_family [family_tax_da,]
+rownames(otu_da_family) <- names(family_tax_da)
+write.csv(t(otu_da_family), here::here("corr_mats/DA_fam.csv"))
 ```
 
 Prepare a table of picrust-pathways for correlation
