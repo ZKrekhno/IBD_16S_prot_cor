@@ -169,11 +169,22 @@ prevalent_pth <- pth_prev_sum %>%
 pth_prev <- pth_mat [prevalent_pth,]
 pth_clr <- qiime2R::make_clr(pth_prev)
 
+#Read in ALDEX2 results of the PICRUST2 analysis, and constrain to just significant hits
+pth_da <- read_csv(here::here("picrust_res/Aldex2_functional_by_Group.csv"))
+pth_da_signi <- pth_da %>% 
+  filter(`q value t test` < 0.05 | `q value Wilcxon` < 0.05) %>% 
+  pull(var = "rownames(x.tt)")
+
+#Constrain matrix to just significant hits
+pth_clr_da <- pth_clr [rownames(pth_clr) %in% pth_da_signi, ]
+
 
 pth_mat %>% t %>% rowMeans() %>% hist(main = "Untransformed pathways")
 pth_prev %>% t %>% rowMeans() %>% hist(main = "Prevalent pathways")
 pth_clr %>% t %>% rowMeans() %>% hist(main = "Prevalent clr pathways")
+pth_clr_da %>% t %>% rowMeans() %>% hist(main = "Prevalent clr DA pathways")
 #write.csv(t(pth_clr), here::here("corr_mats/clr_pth.csv"))
+#write.csv(t(pth_clr_da), here::here("corr_mats/clr_pth_da.csv"))
 ```
 
 
