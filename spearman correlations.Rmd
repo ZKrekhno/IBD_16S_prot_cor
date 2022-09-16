@@ -177,14 +177,17 @@ pth_da_signi <- pth_da %>%
 
 #Constrain matrix to just significant hits
 pth_clr_da <- pth_clr [rownames(pth_clr) %in% pth_da_signi, ]
+pth_log_da <- pth_prev [rownames(pth_clr) %in% pth_da_signi, ] %>% log1p
 
 
 pth_mat %>% t %>% rowMeans() %>% hist(main = "Untransformed pathways")
 pth_prev %>% t %>% rowMeans() %>% hist(main = "Prevalent pathways")
 pth_clr %>% t %>% rowMeans() %>% hist(main = "Prevalent clr pathways")
 pth_clr_da %>% t %>% rowMeans() %>% hist(main = "Prevalent clr DA pathways")
+pth_log_da %>% t %>% rowMeans() %>% hist(main = "Prevalent log DA pathways")
 #write.csv(t(pth_clr), here::here("corr_mats/clr_pth.csv"))
 #write.csv(t(pth_clr_da), here::here("corr_mats/clr_pth_da.csv"))
+#write.csv(t(pth_log_da), here::here("corr_mats/log_pth_da.csv"))
 ```
 
 
