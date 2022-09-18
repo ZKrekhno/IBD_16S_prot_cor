@@ -153,6 +153,47 @@ pwalk(list(scatter_list, xlabs,ylabs, rcoefs,pvals, names(scatter_list)),
   
 #dev.off()
 ```
+Plot scatter plots of top Entero correlations
+```{r enter-scatte}
+df_entero_list <- df_top_filt_list %>% 
+  map(filter, Var2 == "f__Enterobacteriaceae") %>% 
+  keep(~nrow(.)>0)
+
+#Select Entero associations
+mq_entero_list <- mq_top_list %>% 
+  keep(names(.) %in% names(df_entero_list)) %>% 
+  map2(df_entero_list, ~ .x [,colnames(.x) %in% pull(.y,var = "Var1")]) %>%  
+  map(as.data.frame, stringsAsFactors = F)
+pth_entero_list <- pth_filt_list %>% 
+  keep(names(.) %in% names(df_entero_list)) %>%  
+  map2(df_entero_list, ~ .x [,colnames(.x) %in% pull(.y,var = "Var2")]) %>%
+  map(as.data.frame, stringsAsFactors = F)
+#prepare lists for names
+ylabs_entero <- map(df_entero_list, pull, var = "Var1")
+#One of conditions only has one correlation - pull it out
+single_prot_cor <- ylabs_entero %>% 
+  keep(~length(.)==1) %>% 
+  map_chr(as.character) %>% 
+  unname()
+#prepare list for scatter plots
+scatter_entero_list <- map2(mq_entero_list, pth_entero_list, merge, by = 0) %>% 
+  map(as_tibble) %>% 
+  map_if(~ncol(.) > 3,~pivot_longer(.,-matches("(Row)|(x)"), names_to = "Protein", values_to = "Protein abundance")) %>% 
+  map_if(~ncol(.) == 3, ~rename(.,`.x[[i]]` = ".x[[i]].x", `Protein abundance` = ".x[[i]].y")) %>% 
+  map_if(~ncol(.) == 3, mutate, Protein = single_prot_cor)
+
+
+#pdf(here::here("spear_DA_family/DA Entero scatter list.pdf"), width = 8, height = 6)
+walk2(scatter_entero_list, names(scatter_entero_list), 
+      ~print(ggplot(.x, aes(x = `.x[[i]]`, y = `Protein abundance`)) +
+               geom_point() +
+               geom_smooth(method = "lm") + 
+               facet_wrap(~Protein, scales = "free_y") +
+               labs(x = "Enterobacteriaceae abundance", subtitle = "Significant correlations", title = .y)
+             ))
+#dev.off()
+```
+
 Plot bubble plots of Spearman correlations
 ```{r spearman-plot-bubble, fig.height=8, fig.width=12.5}
 #Only keep strong associations
@@ -161,7 +202,7 @@ df_top_reduced <- keep(df_top_filt_list, ~nrow(.) > 0) %>%
 
 
 
-pdf(here::here("spear_DA_family/DA Family correlations.pdf"), height = 8, width = 12.5)
+#pdf(here::here("spear_DA_family/DA Family correlations.pdf"), height = 8, width = 12.5)
 walk2(df_top_reduced, names(df_top_reduced),
       ~print(ggplot(.x, aes_(x=quote(Var1), y=quote(Var2))) +
               geom_point(aes(color = value.x, fill = value.x, size = value), alpha = 0.6, shape = 21) +
@@ -171,7 +212,7 @@ walk2(df_top_reduced, names(df_top_reduced),
               labs(x=element_blank(), y=element_blank(),
                    title = .y, subtitle = "Yes, No, Not Applicable means correlations were done within Active_IBD category") +
               theme_bw(base_size = 12) + theme(axis.text.x = element_text(angle = 45, hjust = 0.9))))
-dev.off()
+#dev.off()
 ```
 
 
