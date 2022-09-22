@@ -175,5 +175,34 @@ walk2(df_top_reduced, names(df_top_reduced),
               theme_bw(base_size = 12) + theme(axis.text.x = element_text(angle = 45, hjust = 0.9))))
 #dev.off()
 ```
+Replot graphs with just proteins that were correlated with Entero
+```{r entero-prot-constrain-plot, fig.width=10, fig.height=10}
+entero_assoc_files <- list.files(path = here::here("spear_entero/"), pattern = ".csv")
+entero_assoc_df <- map(entero_assoc_files, ~read_csv(here::here(str_c("spear_entero/",.)))) %>% 
+  set_names(str_remove(entero_assoc_files,".csv"))
+entero_assoc_signi <- entero_assoc_df %>% 
+  map(filter, value < 0.05) %>% 
+  keep(~nrow(.) >0) %>% 
+  map(pull, "Var1") %>% 
+  reduce(append) %>% 
+  unique()
+#Constrain correlations to Entero-associated proteins
+df_top_entero <- keep(df_top_filt_list, ~nrow(.) > 0) %>% 
+  map(filter, Var1 %in% entero_assoc_signi) %>% 
+  keep( ~nrow(.) > 0)
+#pdf(here::here("spear_pathways/DA Pathway correlations constrained to Entero-associated proteins.pdf"), height = 10, width = 10)
+walk2(df_top_entero, names(df_top_entero),
+      ~print(ggplot(.x, aes_(x=quote(Var1), y=quote(Var2))) +
+              geom_point(aes(color = value.x, fill = value.x, size = value), alpha = 0.6, shape = 21) +
+              scale_fill_distiller(name = "Spearman rho",palette = "PuOr", breaks = c(-0.4,0,0.4)) +
+              scale_color_distiller(name = "Spearman rho", palette = "PuOr",breaks = c(-0.4,0,0.4)) +
+              scale_size(name = "Adjusted p",trans = 'reverse', range = c(5,8)) +
+              labs(x=element_blank(), y=element_blank(),
+                   title = .y, subtitle = "Entero-associated DA proteins") +
+              theme_bw(base_size = 10) + theme(axis.text.x = element_text(angle = 45, hjust = 0.9))))
+#dev.off()
+#walk2(df_top_entero, names(df_top_entero), 
+ #     ~write_csv(.x, here::here(str_c("spear_pathways/",.y,"_DA_pathway_Entero_associated_prot.csv"))))
+```
 
 
