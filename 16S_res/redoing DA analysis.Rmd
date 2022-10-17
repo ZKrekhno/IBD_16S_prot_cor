@@ -58,6 +58,11 @@ ancom_ti_within_ibd <- ancombc(phyloseq = phy_col_ibd, formula = "Batch+TI_resec
                        p_adj_method = "fdr")
 ancom_ti_within_ibd_res <- as.data.frame(ancom_ti_within_ibd$res) %>% 
   merge(tax_table(phy_col), by = 0)
+
+#Write results
+walk2(list(ancom_colon_res, ancom_ti_group_res, ancom_ti_within_ibd_res),
+      c("Colon Control v IBD", "Colon Control v IBD TI or no TI", "IBD Colon TI vs no TI"), 
+      ~write_csv(.x, here::here(str_c("16S_res/ancom_redone_",.y,".csv"))))
 ```
 
 Plot the results
