@@ -1,0 +1,129 @@
+---
+title: "DA Avril way"
+output: html_notebook
+---
+
+```{r library-load}
+library(phyloseq)
+library(ANCOMBC)
+library(tidyverse)
+library(ggprism)
+```
+
+```{r load-16s-data}
+biom <-  import_biom("table-with-taxonomy.biom", parseFunction = parse_taxonomy_default)
+tree <- read_tree_greengenes("tree.nwk")
+metadata <- import_qiime_sample_data("metadata.txt")
+physeq <- merge_phyloseq(biom, metadata, tree)
+colnames(tax_table(physeq)) <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+#Remove irrelevant samples
+physeq <- subset_samples(physeq, !(sample_names(physeq) %in% c("C34C","I01I","I60I","I12I", "I44I")))
+#Remove all mocks, and negative controls
+physeq <- subset_samples(physeq, str_detect(X.SampleID, "(Mock)|(Neg)|(TC7)|(H2O)", negate = T))
+sample_names(physeq) <- str_remove(sample_names(physeq),"Rep")
+#Agglomerate to family level
+phy_family <- tax_glom(physeq,taxrank = "Family")
+```
+
+```{r prep-ps-objects}
+phy_col <- subset_samples(phy_family, Tissue_type == "Colon")
+phy_col_ti_group <- phy_col
+meta_modified <-  sample_data(phy_col) %>% 
+    as_tibble(rownames = NA) 
+meta_ti_group <- meta_modified %>% 
+  mutate(TI_group = str_c(Group, str_replace_na(TI_resection), sep = "__")) %>% 
+  as.data.frame()
+rownames(meta_ti_group) <- rownames(meta_modified)
+sample_data(phy_col_ti_group) <- meta_ti_group 
+
+
+phy_col_ibd <- subset_samples(phy_col, Group == "IBD")
+
+```
+
+Run the comparisons with ANCOM-BC
+
+```{r da-analysis}
+# ANCOM-BC
+ancom_colon <- ancombc(phyloseq = phy_col, formula = "Batch+Group",
+                       p_adj_method = "fdr")
+ancom_colon_res <- as.data.frame(ancom_colon$res) %>% 
+  merge(tax_table(phy_col), by = 0)
+
+ancom_ti_group <- ancombc(phyloseq = phy_col_ti_group, formula = "Batch+TI_group",
+                       p_adj_method = "fdr")
+ancom_ti_group_res <- as.data.frame(ancom_ti_group$res) %>% 
+  merge(tax_table(phy_col), by = 0)
+ancom_ti_within_ibd <- ancombc(phyloseq = phy_col_ibd, formula = "Batch+TI_resection",
+                       p_adj_method = "fdr")
+ancom_ti_within_ibd_res <- as.data.frame(ancom_ti_within_ibd$res) %>% 
+  merge(tax_table(phy_col), by = 0)
+```
+
+Plot the results
+
+```{r plot_results, fig.width=6, fig.height=4}
+phy_col_ibd_rel <- transform_sample_counts(phy_col_ti_group, function(x) x/sum(x))
+
+tax_df <- tax_table(phy_col) %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "OTU")
+
+ps_df <- psmelt(phy_col_ibd_rel)  %>% 
+  select(OTU, Abundance, Group, Sample, TI_resection, TI_group) %>% 
+  left_join(tax_df) %>% 
+  filter(str_detect(Family, "Enterobac")) %>% 
+  mutate(TI_group = fct_recode(TI_group,
+                               Control = "Control__NA",
+                               "IBD with TI" = "IBD__0",
+                               "IBD with TI resected" = "IBD__1"))
+
+mycolors <- rcartocolor::carto_pal(name = "Geyser")
+
+plot_group <- ggplot(ps_df, aes(x = Group, y = Abundance*100, color = Group)) +
+  geom_boxplot(color = "black", lwd = 1, alpha = 0) +
+  geom_jitter(aes(fill = Group),width = 0.3, size = 2.5, alpha = 0.7, shape = 21) +
+  theme_prism(base_size = 16) + 
+  geom_text(aes(x="Control", y = 60, 
+                label = str_c("ANCOM-BC\nq-value = ",
+                  round(pull(filter(ancom_colon_res, str_detect(Family, "Enterobac")), q_val.GroupIBD),2))),
+            color = "black", size =5) +
+  labs(x = element_blank(), y = "Relative Abundance(%)") +
+  scale_color_manual(values = mycolors [c(1,7)]) +
+  scale_fill_manual(values = mycolors [c(1,7)]) +
+  guides(color = 'none', fill = 'none')
+
+#Create the data frame of p-values
+
+p_value_df <- data.frame(group1 = c("Control", "Control", "IBD with TI"),
+                         group2 = str_wrap(c("IBD with TI", "IBD with TI resected", "IBD with TI resected"),width = 15),
+                         y.position = c(50,60,70),
+                         p.adj = c(pull(filter(ancom_ti_group_res, str_detect(Family, "Enterobac")), q_val.TI_groupIBD__0),
+                                   pull(filter(ancom_ti_group_res, str_detect(Family, "Enterobac")), q_val.TI_groupIBD__1),
+                                   pull(filter(ancom_ti_within_ibd_res, str_detect(Family, "Enterobac")), q_val.TI_resection)))
+
+#Plot the results with p-value brackets
+
+plot_ti_group <- ggplot(ps_df, aes(x = str_wrap(TI_group,width = 15), y = Abundance*100, color = str_wrap(TI_group,width = 15))) +
+  geom_boxplot(color = "black", lwd = 1, alpha = 0) +
+  geom_jitter(aes(fill = str_wrap(TI_group,width = 15)),width = 0.3, size = 2.5, alpha = 0.7, shape = 21) +
+  theme_prism(base_size = 16, axis_text_angle = 45) + 
+  add_pvalue(data = p_value_df,
+             label = "q = {format(p.adj,digits =2 , scientific = T)}", color = "black",
+             label.size = 4, bracket.size = 0.7, alpha = 1, tip.length = 0,
+             inherit.aes = F) +
+  labs(x = element_blank(), y = "Relative Abundance(%)") +
+  scale_color_manual(values = mycolors [c(1,5,7)]) +
+  scale_fill_manual(values = mycolors [c(1,5,7)]) +
+  guides(color = 'none', fill = 'none')
+```
+
+```{r final_grid, fig.width=6, fig.height=8}
+cowplot::plot_grid(plotlist = list(plot_group,plot_ti_group), nrow = 2)
+ggsave(here::here("16S_res/Ancom_Entero_redo.png"), width = 6, height = 8, dpi = 720)
+```
+
+
+
+
+
