@@ -60,9 +60,9 @@ ancom_ti_within_ibd_res <- as.data.frame(ancom_ti_within_ibd$res) %>%
   merge(tax_table(phy_col), by = 0)
 
 #Write results
-walk2(list(ancom_colon_res, ancom_ti_group_res, ancom_ti_within_ibd_res),
-      c("Colon Control v IBD", "Colon Control v IBD TI or no TI", "IBD Colon TI vs no TI"), 
-      ~write_csv(.x, here::here(str_c("16S_res/ancom_redone_",.y,".csv"))))
+#walk2(list(ancom_colon_res, ancom_ti_group_res, ancom_ti_within_ibd_res),
+ #     c("Colon Control v IBD", "Colon Control v IBD TI or no TI", "IBD Colon TI vs no TI"), 
+  #    ~write_csv(.x, here::here(str_c("16S_res/ancom_redone_",.y,".csv"))))
 ```
 
 Plot the results
@@ -125,7 +125,7 @@ plot_ti_group <- ggplot(ps_df, aes(x = str_wrap(TI_group,width = 15), y = Abunda
 
 ```{r final_grid, fig.width=6, fig.height=8}
 cowplot::plot_grid(plotlist = list(plot_group,plot_ti_group), nrow = 2)
-ggsave(here::here("16S_res/Ancom_Entero_redo.png"), width = 6, height = 8, dpi = 720)
+#ggsave(here::here("16S_res/Ancom_Entero_redo.png"), width = 6, height = 8, dpi = 720)
 ```
 
 
