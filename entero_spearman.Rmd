@@ -9,6 +9,8 @@ library(readxl)
 library(reshape2)
 library(psych)
 library(tidyverse)
+library(ggprism)
+library(rstatix)
 theme_set(theme_classic(base_size = 14))
 ```
 
@@ -106,6 +108,65 @@ mq_top_final <- keep(mq_top_list, str_detect(names(mq_top_list), "Species", nega
 #Ensure rows are in the same order for the matrices
 all(map2_lgl(otu_entero_final, mq_top_final, ~all(rownames(.x) == rownames(.y))))
 ```
+
+
+Run correlations between Entero and 4 bile acid proteins: ASBT,   I-BABP, PTPN6,    SLC51A in Colon (IBD and non-IBD), and IBD colon, resected or non-resected TI
+    
+```{r entero-bile, fig.width=8,fig.height=6}
+#Prepare metadata tables for bile acids
+meta_list_ibd_ti <-meta_list_starter [1:2] %>%
+  map(filter, Tissue_type == "Colon") %>% 
+  map2(c("Control","IBD"),
+       ~filter(.x, group == .y)) 
+
+meta_list_ibd_ti [3:4] <- map(vector(mode = "list", length = 2), ~ meta_list_ibd_ti [[2]]) %>% 
+  map2(c("No","Yes"), ~filter(.x, TI_resection == .y))
+
+names(meta_list_ibd_ti) <- c("Colon_Control","Colon_IBD", "Colon_IBD_with_TI","Colon_IBD_no_TI")
+#Select proteins of interest, names are synonyms
+mq_bile_prot <- mq_mat [, c("SLC10A2","FABP6","PTPN6","SLC51A")]
+mq_bile_list <- meta_list_ibd_ti %>% 
+  map(~ mq_bile_prot [pull(.x,var=sample),])
+#Prepare otu counts matrices
+entero_bile_list <- meta_list_ibd_ti %>% 
+  map(~otu_mat_list [[1]] [pull(.x,var=sample), 
+                     colnames(otu_mat_list [[1]]) %in% pull(filter(tax, Family == "f__Enterobacteriaceae"), var = "...1")])
+#Confirm that things are in proper order
+all(map2_lgl(entero_bile_list, mq_bile_list, ~all(rownames(.x) == rownames(.y))))
+
+tidy_bile_list <- map2(mq_bile_list,entero_bile_list,
+                       ~cbind(.x,.y)) %>%
+  map(as.data.frame)
+dummy_vars <- c("SLC10A2","FABP6","PTPN6","SLC51A")
+#Do the correlation analysis
+spear_bile_list <- map(tidy_bile_list, 
+                       ~cor_test(data = .x, 
+                                 vars = all_of(dummy_vars), 
+                                 vars2 = ".y",
+                                 method = "spearman")) %>% 
+  map(mutate, protein = var1) 
+
+tidy_bile_graphing <- tidy_bile_list %>% 
+  map(pivot_longer, cols = -.y, names_to = "protein", values_to = "protein_abundance") %>% 
+  map2(spear_bile_list, left_join, by = c("protein")) %>% 
+  map(group_by,protein) %>% 
+  map(mutate, text_y = max(protein_abundance)+1)
+
+#pdf(here::here("spear_entero/Entero_bile_proteins_cors.pdf"), width = 8, height = 6)
+walk2(tidy_bile_graphing, names(tidy_bile_graphing),
+      ~print(ggplot(.x, aes(x=.y, y = protein_abundance)) +
+               geom_smooth(method = "lm", lwd =1.2, color = "brown") +
+               geom_point() + 
+               geom_text(aes(x=0,y=text_y, label = str_c("rho = ",cor, "; p = ",round(p,2))), size = 4) +
+               facet_wrap(~protein, nrow = 2, scales = "free_y") +
+               theme_prism(base_size = 14) +
+               labs(caption = .y, x="familyEntero Abundance")))
+#dev.off()
+
+```
+
+
+
 
 Run correlations on subset proteins
 
