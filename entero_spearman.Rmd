@@ -114,27 +114,36 @@ Run correlations between Entero and 4 bile acid proteins: ASBT,   I-BABP, PTPN6,
     
 ```{r entero-bile, fig.width=8,fig.height=6}
 #Prepare metadata tables for bile acids
-meta_list_ibd_ti <-meta_list_starter [1:2] %>%
-  map(filter, Tissue_type == "Colon") %>% 
+meta_list_ibd_ti <-meta_list_starter [1:2] %>% 
   map2(c("Control","IBD"),
        ~filter(.x, group == .y)) 
 
 meta_list_ibd_ti [3:4] <- map(vector(mode = "list", length = 2), ~ meta_list_ibd_ti [[2]]) %>% 
   map2(c("No","Yes"), ~filter(.x, TI_resection == .y))
 
-names(meta_list_ibd_ti) <- c("Colon_Control","Colon_IBD", "Colon_IBD_with_TI","Colon_IBD_no_TI")
+names(meta_list_ibd_ti) <- c("Control","IBD", "IBD_with_TI","IBD_no_TI")
 #Select proteins of interest, names are synonyms
 mq_bile_prot <- mq_mat [, c("SLC10A2","FABP6","PTPN6","SLC51A")]
 mq_bile_list <- meta_list_ibd_ti %>% 
-  map(~ mq_bile_prot [pull(.x,var=sample),])
+  map(~ mq_bile_prot [pull(filter(.x, Tissue_type == "Ileum"),var=sample),])
 #Prepare otu counts matrices
 entero_bile_list <- meta_list_ibd_ti %>% 
-  map(~otu_mat_list [[1]] [pull(.x,var=sample), 
+  map(~otu_mat_list [[1]] [pull(filter(.x, Tissue_type == "Colon"),var=sample), 
                      colnames(otu_mat_list [[1]]) %in% pull(filter(tax, Family == "f__Enterobacteriaceae"), var = "...1")])
-#Confirm that things are in proper order
-all(map2_lgl(entero_bile_list, mq_bile_list, ~all(rownames(.x) == rownames(.y))))
+#Remove unmatching samples
+entero_samples_to_keep <- map2(entero_bile_list, mq_bile_list,
+                               ~intersect(names(.x),str_replace(rownames(.y),"I$","C")))
+mq_samples_to_keep <- map2(entero_bile_list, mq_bile_list,
+                           ~intersect(str_replace(names(.x),"C$","I"), rownames(.y)))
+entero_bile_match_list <- map2(entero_bile_list, entero_samples_to_keep,
+                               ~ .x [.y])
+mq_bile_match_list <- map2(mq_bile_list, mq_samples_to_keep,
+                               ~ .x [.y,])
 
-tidy_bile_list <- map2(mq_bile_list,entero_bile_list,
+#Confirm that things are in proper order
+map2_lgl(entero_bile_match_list, mq_bile_match_list, ~all(names(.x) == str_replace(rownames(.y),"I$","C")))
+
+tidy_bile_list <- map2(mq_bile_match_list,entero_bile_match_list,
                        ~cbind(.x,.y)) %>%
   map(as.data.frame)
 dummy_vars <- c("SLC10A2","FABP6","PTPN6","SLC51A")
@@ -160,7 +169,7 @@ walk2(tidy_bile_graphing, names(tidy_bile_graphing),
                geom_text(aes(x=0,y=text_y, label = str_c("rho = ",cor, "; p = ",round(p,2))), size = 4) +
                facet_wrap(~protein, nrow = 2, scales = "free_y") +
                theme_prism(base_size = 14) +
-               labs(caption = .y, x="familyEntero Abundance")))
+               labs(caption = .y, x="family Entero Abundance in colon", y = "Protein abundance in ileum")))
 #dev.off()
 
 ```
