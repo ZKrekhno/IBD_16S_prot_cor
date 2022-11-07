@@ -240,6 +240,63 @@ pwalk(list(scatter_list, xlabs,ylabs, rcoefs,pvals, names(scatter_list)),
   
 #dev.off()
 ```
+Make connected boxplots for Ravi
+
+```{r entero-fasn-boxplot, fig.width=6, fig.height=4}
+box_df_entero <- otu_list [[1]] %>% 
+  select(`...1`,any_of(pull(filter(tax, Family == "f__Enterobacteriaceae"), var = "...1"))) %>% 
+  rename_with(.fn = ~ "Enterobacteriaceae", .cols = contains("1b6"))
+box_df_fasn <- mq_mat [,"FASN"] %>% 
+  as_tibble(rownames = "...1") %>% 
+  rename(FASN = value)
+
+box_df_meta <- left_join(box_df_entero, box_df_fasn, by = "...1") %>% 
+  left_join(meta_full, by = c("...1" = "sample")) %>% 
+  pivot_longer(cols = c("Enterobacteriaceae","FASN"), names_to = "feature", values_to = "value") %>% 
+  group_by(feature) %>% 
+  mutate(center_value = value - median(value, na.rm = T))
+
+box_list <- set_names(c(".","Ileum", "Colon"),nm=c("Overall","Ileum", "Colon")) %>% 
+  map(~filter(box_df_meta, group == "IBD",
+              str_detect(Tissue_type, .x)))
+
+box_plot_list <- box_list %>% 
+  map2(names(box_list),
+       ~ggplot(.x, aes(x=feature, y=center_value)) +
+         geom_boxplot(lwd = 1) +
+         geom_line(aes(group = `...1`), color = "grey70") +
+         geom_point(aes(color = feature), size = 2) +
+         guides(color = 'none') +
+         labs(caption = str_c("IBD",.y, sep = " "), y = "Centered Log Abundance", x = element_blank()) +
+         theme_prism(base_size = 13))
+```
+
+```{r fasn-entero-scatter, fig.width=6, fig.height=4}
+spear_df_meta <- left_join(box_df_entero, box_df_fasn, by = "...1") %>% 
+  left_join(meta_full, by = c("...1" = "sample")) 
+
+spear_fasn_entero_list <- set_names(c(".","Ileum", "Colon"),nm=c("Overall","Ileum", "Colon")) %>% 
+  map(~filter(spear_df_meta, group == "IBD",
+              str_detect(Tissue_type, .x)))
+
+spear_plot_list <- spear_fasn_entero_list %>% 
+  map2(names(spear_fasn_entero_list),
+       ~ggplot(.x, aes(x=Enterobacteriaceae,y=FASN)) +
+         geom_smooth(method = "lm", lwd = 1.2, color = "brown") +
+         geom_point(size = 2) +
+         labs(caption = str_c("IBD",.y, sep = " ")) +
+         theme_prism(base_size = 14))
+```
+
+
+
+```{r entero-fasn-boxplot-or-scatter-grid, fig.width=10, fig.height=4}
+cowplot::plot_grid(plotlist = box_plot_list, nrow = 1)
+#ggsave(here::here("spear_entero/connected_boxplot_entero_fasn.png"), width = 10, height = 4, dpi = 1080)
+cowplot::plot_grid(plotlist = spear_plot_list, nrow = 1)
+#ggsave(here::here("spear_entero/scatterplot_entero_fasn.png"), width = 10, height = 4, dpi = 1080)
+```
+
 Plot bubble plots of Spearman correlations
 ```{r spearman-plot-bubble, fig.height=6, fig.width=8}
 df_top_reduced <- keep(df_top_filt_list, ~nrow(.) > 0) %>% 
