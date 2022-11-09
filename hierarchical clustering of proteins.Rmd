@@ -1,0 +1,130 @@
+---
+title: "Clustering proteins"
+output: html_notebook
+---
+
+```{r, echo=FALSE, include=FALSE}
+library(readxl)
+library(reshape2)
+library(psych)
+library(dendextend)
+library(tidyverse)
+library(ggprism)
+theme_set(theme_prism(base_size = 14))
+```
+
+Import all the necessary matrices for analysis
+```{r import}
+files <- list.files(path = here::here("corr_mats/"))
+ms_file_list <- str_subset(files, "ms")
+#Import MS data
+mq_mat <- read_csv(file = here::here(str_c("corr_mats/",ms_file_list))) %>% 
+  column_to_rownames(var = "...1") %>% 
+  as.matrix()
+```
+We will be doing correlations within just Ileum or Colon and within noIBD, active, or inactive IBD
+```{r import-meta}
+meta_full <- read_excel(here::here("Metadata.xlsx")) %>% 
+  select("sample" = `#SampleID`, "group" = Group, everything()) %>% 
+  mutate(sample = str_remove(sample, "Rep")) %>% 
+  filter(sample %in% rownames(mq_mat)) %>% 
+  mutate(across(matches("(Active)|(TI_resection)|(Cholestyramine)"), ~as.character(fct_recode(as_factor(.x), 
+                                                Yes = "1", No = "0", Not_applicable = "NA"))))
+#Prepare metadata tables
+meta_group_list <- vector(mode = "list", length = 4) %>% 
+  map(~ meta_full) %>%  
+  map2(rep(c("Colon","Ileum"), each = 2), 
+       ~filter(.x, Tissue_type == .y)) %>% 
+  map2(rep(c("Control","IBD"),times = 2), 
+       ~filter(.x, group == .y)) %>% 
+  set_names(nm = str_c(rep(c("Colon","Ileum"), each = 2), rep(c("Control","IBD"),times = 2), sep = "_"))
+meta_active_list <- vector(mode = "list", length = 6) %>% 
+  map(~ meta_full) %>%  
+  map2(rep(c("Colon","Ileum"), each = 3), 
+       ~filter(.x, Tissue_type == .y)) %>% 
+  map2(rep(c("Not_applicable","No","Yes"),times = 2), 
+       ~filter(.x, Active_IBD == .y)) %>% 
+  set_names(str_c(rep(c("Colon","Ileum"), each = 3),rep(c("Not_applicable","No","Yes"),times = 2), sep = "_"))
+meta_list <- c(meta_group_list, meta_active_list)
+
+#Keep list names for convenience
+subgroups <- names(meta_list)
+```
+Further filter the proteomics data to just include DE proteins between active/inactive IBD vs control in each group
+```{r select_top_prots}
+#Import the results
+da_res <- map(list.files(here::here("spear_subset_on_Foster"), pattern = "full_"),
+              ~read_csv( file = here::here(str_c("spear_subset_on_Foster/",.)))) 
+da_res <- set_names(da_res, nm = list.files(here::here("spear_subset_on_Foster"), pattern = "full_"))
+#Reduce the results to one table, and filter afterwards
+#Filter for significance and effect 
+da_res_interest <- da_res %>% 
+  map(filter, if_any(contains("adj"), ~.<0.01), if_any(contains("eff"), ~abs(.)>0.5)) %>% 
+  reduce(full_join, by = c("gene.name","first.id")) %>% 
+  select(gene.name,first.id, contains("padj"), -contains("grand"), contains("eff")) 
+
+
+#Get the protein names to select
+da_prots <- da_res_interest %>% 
+  select(gene.name) %>% 
+  separate(gene.name, into = letters [1:20], sep = " ") %>% 
+  pivot_longer(letters [2:20], names_to = "letters", values_to = "secondary_names")
+da_prots_final <- c(da_prots$a,da_prots$secondary_names) %>% 
+  . [!is.na(.)] %>% 
+  str_remove_all(";")
+
+#Create the new mq_list
+mq_top_list <- map(meta_list, ~ mq_mat [,colnames(mq_mat) %in% da_prots_final]) %>% 
+  map2(meta_list, ~ .x [pull(.y,var = sample),]) 
+```
+
+
+
+
+Run correlations on the top proteins in each comparison - only look at IBD colon and ileum for now
+
+```{r spearman}
+mq_select_top <- mq_top_list [c(2,4)]
+#Run the spearman correlations
+psych_cor_list <- mq_select_top %>% 
+  map(corr.test, method = "spearman")
+#Extract the coef and p-value matrices
+psych_cor_mats_list <- psych_cor_list %>% 
+  map(function(x) map(c("r","p"), 
+                        ~x [.x]))
+#Melt the matrices
+#Create the helper function to assign NA to lower triangle of the matrix
+assign_lower_tri_na <- function(x) {
+  x [lower.tri(x, diag = T)] <- NA
+  return(x)
+}
+psych_dfs_list <- psych_cor_mats_list %>% 
+  map_depth(1, flatten) %>%  
+  map_depth(2, assign_lower_tri_na) %>%  
+  map_depth(2, melt) %>% 
+  map_depth(2, filter, !is.na(value)) %>% 
+  map_depth(1, reduce, left_join, by = c("Var1","Var2")) %>% 
+  map(rename, r = value.x, p = value.y)
+```
+
+
+```{r clustering}
+#Transform the correlation into Distances
+  
+psych_dist <- psych_cor_list %>% 
+  map(~.x$r) %>% 
+  map(~as.dist(1-.x))
+
+#Use Ward linkages to cluster the correlation data
+
+psych_tree <- psych_dist %>% 
+  map(hclust, method = "ward.D2")
+
+psych_dend <- psych_tree %>% 
+  map(as.dendrogram)
+
+walk(psych_dend, plot, leaflab = "none")
+map(psych_dend, nleaves)
+map(psych_dend, nnodes)
+```
+
