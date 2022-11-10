@@ -8,6 +8,7 @@ library(readxl)
 library(reshape2)
 library(psych)
 library(dendextend)
+library(gplots)
 library(tidyverse)
 library(ggprism)
 theme_set(theme_prism(base_size = 14))
@@ -107,12 +108,15 @@ psych_dfs_list <- psych_cor_mats_list %>%
   map(rename, r = value.x, p = value.y)
 ```
 
+Now that correlation is done, we can run the clustering analysis with Ward linkages
 
 ```{r clustering}
 #Transform the correlation into Distances
   
-psych_dist <- psych_cor_list %>% 
-  map(~.x$r) %>% 
+psych_coef_list <- psych_cor_list %>% 
+  map(~.x$r) 
+  
+psych_dist <- psych_coef_list %>% 
   map(~as.dist(1-.x))
 
 #Use Ward linkages to cluster the correlation data
@@ -123,8 +127,64 @@ psych_tree <- psych_dist %>%
 psych_dend <- psych_tree %>% 
   map(as.dendrogram)
 
-walk(psych_dend, plot, leaflab = "none")
+
 map(psych_dend, nleaves)
 map(psych_dend, nnodes)
+#Try to cut the dendrogram into clusters
+cluster_number <- 6
+psy_clust <- psych_dend %>% 
+  map(cutree, k=cluster_number)
+#Check how many proteins in each cluster
+map(psy_clust, table)
+
+walk2(psych_dend,names(psych_dend), ~plot(color_branches(.x, k=cluster_number), leaflab = "none", xlab = .y ))
 ```
+
+We can try visualizing the results in a heatmap of correlations
+
+```{r k-medoid-cluster, fig.width=6, fig.height=6}
+#Create clusters using k-medoids
+psy_kmed <- psych_dist %>% 
+  map(cluster::pam, cluster_number)
+map(psy_kmed, ~table(.x$cluster))
+psy_kmed_clusters <- psy_kmed %>% 
+  map(~.x$cluster)
+```
+
+
+```{r heatmap, fig.width=6, fig.height=6}
+mycolors <- rcartocolor::carto_pal(name = "Geyser")
+
+color_sheme <- colorRampPalette(mycolors) (255)
+
+pdf(here::here("protein_cluster_correlation/DA_clustering_heatmaps.pdf"), width = 6, height = 6)
+pwalk(list(psych_coef_list, psych_dend,names(psych_coef_list)), 
+     ~heatmap.2(..1, Rowv = NULL, Colv =NULL, dendrogram = "none", 
+                col = color_sheme, 
+                trace = "none", density.info = "none", revC = T,
+                key.title = "Color Key", key.xlab = "Spearman's R", sub = ..3, keysize = 1.5,
+                labCol = FALSE, cexRow = 0.5, main = "No clustering"))
+
+pwalk(list(psych_coef_list, psych_dend,names(psych_coef_list)), 
+     ~heatmap.2(..1, Rowv = ladderize(..2), Colv =ladderize(..2), dendrogram = "none", 
+                col = color_sheme, 
+                trace = "none", density.info = "none", revC = T,
+                key.title = "Color Key", key.xlab = "Spearman's R", sub = ..3, keysize = 1.5,
+                labCol = "", cexRow = 0.5, main = "Ward clustering"))
+psy_coef_kmed_list <- psych_coef_list %>% 
+  map2(psy_kmed_clusters, ~ .x [order(.y),order(.y)])
+psy_kmed_cluster_cols <- psy_kmed_clusters %>% 
+  map(~.x [order(.x)]) %>% 
+  map(as_tibble) %>% 
+  map(mutate, color = rcartocolor::carto_pal(name = "Antique") [value])
+  
+pwalk(list(psy_coef_kmed_list,names(psych_coef_list), psy_kmed_cluster_cols), 
+     ~heatmap.2(..1, Rowv = NULL, Colv =NULL, dendrogram = "none", 
+                col = color_sheme, 
+                trace = "none", density.info = "none", revC = T,
+                key.title = "Color Key", key.xlab = "Spearman's R", sub = ..2, keysize = 1.5,
+                labCol = "", cexRow = 0.5, main = "K-medoid clustering", RowSideColors = pull(..3,var = "color")))
+dev.off()
+```
+
 
