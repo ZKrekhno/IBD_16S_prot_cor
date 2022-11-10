@@ -7,6 +7,7 @@ output: html_notebook
 library(readxl)
 library(reshape2)
 library(psych)
+library(phyloseq)
 library(dendextend)
 library(gplots)
 library(clusterProfiler)
@@ -196,9 +197,10 @@ cp <- read.gmt(here::here("c2.cp.v7.5.1.symbols.gmt")) %>%
   mutate(term = str_remove(term,"REACTOME_"))
 universe <- colnames(mq_mat)
 #Get lists of Ward clusters from clustering data
-psy_ward_clusters <- psy_clust %>% 
+psy_ward_cluster_dfs <- psy_clust %>% 
   map(melt) %>% 
-  map(rownames_to_column, var = "protein") %>% 
+  map(rownames_to_column, var = "protein") 
+psy_ward_clusters <- psy_ward_cluster_dfs %>% 
   map(nest, data = "protein") %>% 
   map(~ .x [[2]]) %>% 
   map_depth(2, flatten_chr) %>% 
@@ -270,6 +272,97 @@ map(h_dot_heat_list,
 map(cp_dot_heat_list,
   ~cowplot::plot_grid(plotlist = .x, nrow = 2))
 #dev.off()
+```
+Next step is to average expression of the proteins within a cluster (only keep clusters that had some functionality identified) and correlate that with bacterial expression
+
+```{r average_cluster_expression}
+mq_cluster_expression <- mq_select_top %>% 
+  map(melt) %>% 
+  map(rename, protein = Var2, sample = Var1, abundance = value) %>% 
+  map2(psy_ward_cluster_dfs, left_join, by = "protein") %>% 
+  map(mutate, value = str_c("cluster",value, sep = "_")) %>% 
+  map(group_by, value, sample) %>% 
+  map(summarize, cluster_mean = mean(abundance)) 
+
+mq_relevant_cluster_expr <- pmap(list(mq_cluster_expression, suc_h_list, suc_cp_list),
+                                 ~ filter(..1, value %in% union(names(..2), names(..3))))
+
+mq_cluster_mat <- mq_relevant_cluster_expr %>% 
+  map(pivot_wider, names_from = value, values_from = cluster_mean) %>% 
+  map(column_to_rownames, var = "sample") %>% 
+  map(as.matrix)
+```
+
+Next get bacterial families
+Import all the necessary matrices for analysis
+```{r import-otu}
+files <- list.files(path = here::here("corr_mats/"))
+otu_file_list <- str_subset(files,"clr(.)+otu")
+tax_file_list <- str_subset(files,"tax")
+#Import otu counts
+otu_list <- map(otu_file_list, 
+                    ~read_csv(file = here::here(str_c("corr_mats/",.))))
+otu_mat_list <- otu_list %>% 
+  map(column_to_rownames, var = "...1") %>% 
+  map(as.matrix)
+#Only keep family level otus
+otu_family <- otu_mat_list [[1]]
+#Prepare the OTU matrices for each comparison
+otu_fam_list <- mq_cluster_mat %>% 
+  map(~ otu_family [rownames(.x),])
+```
+
+
+```{r select-top-otu}
+biom <-  import_biom("table-with-taxonomy.biom", parseFunction = parse_taxonomy_default)
+tree <- read_tree_greengenes("tree.nwk")
+metadata <- import_qiime_sample_data("metadata.txt")
+physeq <- merge_phyloseq(biom, metadata, tree)
+colnames(tax_table(physeq)) <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+#Remove irrelevant samples
+physeq <- subset_samples(physeq, !(sample_names(physeq) %in% c("C34C","I01I","I60I","I12I", "I44I")))
+#Remove all mocks, and negative controls
+physeq <- subset_samples(physeq, str_detect(X.SampleID, "(Mock)|(Neg)|(TC7)|(H2O)", negate = T))
+sample_names(physeq) <- str_remove(sample_names(physeq),"Rep")
+
+phy_fam <- tax_glom(physeq, taxrank = "Family")
+phy_fam_rel <- transform_sample_counts(phy_fam, function(x) x/sum(x)) 
+
+otu_fam_rel <- mq_select_top %>% 
+  map(~otu_table(phy_fam_rel)) %>% 
+  map2(mq_select_top, ~.x [,rownames(.y)])
+
+
+#In each case select a top n number of families (mean abundance)
+top_cut <- 20
+otu_top_fam <- otu_fam_rel %>%
+  map(melt) %>% 
+  map(group_by, Var1) %>%   
+  map(summarise, mean_abund = mean(value)) %>% 
+  map(~arrange(.x,desc(mean_abund))) %>% 
+  map(slice_head, n=top_cut)
+
+otu_fam_list <- mq_cluster_mat %>% 
+  map(~ otu_family [rownames(.x),])
+
+otu_fam_list <- otu_fam_list %>% 
+  map2(otu_top_fam, ~.x [,colnames(.x) %in% pull(.y,var = "Var1")])
+```
+
+Run Spearman correlations
+```{r cluster-otu-spear} 
+cluster_fam_list <- cross2(mq_cluster_mat, otu_fam_list)
+cluster_spear <- map(cluster_fam_list,
+                      ~corr.test(x=.x [[1]],y=.x [[2]], method = "spearman", adjust = "BH"))
+cluster_spear_r <- map(cluster_spear, 
+                          ~melt(.x$r))
+cluster_spear_p <- map(cluster_spear, 
+                          ~melt(.x$p))
+cluster_spear_padj <- map(cluster_spear, 
+                          ~melt(.x$p.adj))
+cluster_spear_melt <- pmap(list(cluster_spear_r, cluster_spear_p, cluster_spear_padj),
+                           ~ reduce(list(..1,..2,..3), left_join, by = c("Var1","Var2")))
+map(cluster_spear_melt, ~min(.x$value))
 ```
 
 
