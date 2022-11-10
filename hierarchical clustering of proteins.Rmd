@@ -9,6 +9,7 @@ library(reshape2)
 library(psych)
 library(dendextend)
 library(gplots)
+library(clusterProfiler)
 library(tidyverse)
 library(ggprism)
 theme_set(theme_prism(base_size = 14))
@@ -108,7 +109,7 @@ psych_dfs_list <- psych_cor_mats_list %>%
   map(rename, r = value.x, p = value.y)
 ```
 
-Now that correlation is done, we can run the clustering analysis with Ward linkages
+Now that correlation is done, we can run the clustering analysis with Ward linkages. Roughly following (this)[https://bio723-class.github.io/Bio723-book/clustering-in-r.html#combining-heatmaps-and-dendrograms] for the clustering analysis. 
 
 ```{r clustering}
 #Transform the correlation into Distances
@@ -157,20 +158,20 @@ mycolors <- rcartocolor::carto_pal(name = "Geyser")
 
 color_sheme <- colorRampPalette(mycolors) (255)
 
-pdf(here::here("protein_cluster_correlation/DA_clustering_heatmaps.pdf"), width = 6, height = 6)
+#pdf(here::here("protein_cluster_correlation/DA_clustering_heatmaps.pdf"), width = 6, height = 6)
 pwalk(list(psych_coef_list, psych_dend,names(psych_coef_list)), 
      ~heatmap.2(..1, Rowv = NULL, Colv =NULL, dendrogram = "none", 
                 col = color_sheme, 
                 trace = "none", density.info = "none", revC = T,
                 key.title = "Color Key", key.xlab = "Spearman's R", sub = ..3, keysize = 1.5,
-                labCol = FALSE, cexRow = 0.5, main = "No clustering"))
+                cexRow = 0.5,cexCol = 0.5, main = "No clustering", labCol = F, labRow = F))
 
 pwalk(list(psych_coef_list, psych_dend,names(psych_coef_list)), 
      ~heatmap.2(..1, Rowv = ladderize(..2), Colv =ladderize(..2), dendrogram = "none", 
                 col = color_sheme, 
                 trace = "none", density.info = "none", revC = T,
                 key.title = "Color Key", key.xlab = "Spearman's R", sub = ..3, keysize = 1.5,
-                labCol = "", cexRow = 0.5, main = "Ward clustering"))
+                 cexRow = 0.5,cexCol = 0.5, main = "Ward clustering",labCol = F, labRow = F))
 psy_coef_kmed_list <- psych_coef_list %>% 
   map2(psy_kmed_clusters, ~ .x [order(.y),order(.y)])
 psy_kmed_cluster_cols <- psy_kmed_clusters %>% 
@@ -183,8 +184,93 @@ pwalk(list(psy_coef_kmed_list,names(psych_coef_list), psy_kmed_cluster_cols),
                 col = color_sheme, 
                 trace = "none", density.info = "none", revC = T,
                 key.title = "Color Key", key.xlab = "Spearman's R", sub = ..2, keysize = 1.5,
-                labCol = "", cexRow = 0.5, main = "K-medoid clustering", RowSideColors = pull(..3,var = "color")))
-dev.off()
+                cexRow = 0.5,cexCol = 0.5, main = "K-medoid clustering", RowSideColors = pull(..3,var = "color"),
+                labCol = F, labRow = F))
+#dev.off()
 ```
+Perform functional analysis of the clusters
+```{r cluster-profiler}
+h <- read.gmt(here::here("h.all.v7.5.1.symbols.gmt"))
+cp <- read.gmt(here::here("c2.cp.v7.5.1.symbols.gmt")) %>% 
+  filter(str_detect(term, "REACT")) %>% 
+  mutate(term = str_remove(term,"REACTOME_"))
+universe <- colnames(mq_mat)
+#Get lists of Ward clusters from clustering data
+psy_ward_clusters <- psy_clust %>% 
+  map(melt) %>% 
+  map(rownames_to_column, var = "protein") %>% 
+  map(nest, data = "protein") %>% 
+  map(~ .x [[2]]) %>% 
+  map_depth(2, flatten_chr) %>% 
+  map_depth(1, set_names, nm = str_c("cluster", 1:6, sep = "_"))
+
+#Perform ORA analysis using either Hallmark or Reactome pathways
+
+h_list <- psy_ward_clusters %>% 
+  map_depth(2, 
+            ~enricher(.x, TERM2GENE = h, 
+                      pvalueCutoff = 0.05, pAdjustMethod = "BH", universe = universe,
+                      qvalueCutoff = 0.05))
+
+cp_list <- psy_ward_clusters %>% 
+  map_depth(2, 
+            ~enricher(.x, TERM2GENE = cp, 
+                      pvalueCutoff = 0.05, pAdjustMethod = "BH", universe = universe,
+                      qvalueCutoff = 0.05))
+
+#Filter to only keep succesful clusters
+
+suc_h_list <- h_list %>% 
+  map(~keep(.x,~nrow(.x) > 0))
+flat_suc_h_list <- suc_h_list %>% 
+  map2(names(suc_h_list), ~set_names(.x,nm=str_c(.y, names(.x), sep = "__"))) %>% 
+  flatten() 
+suc_cp_list <- cp_list %>% 
+  map(~keep(.x,~nrow(.x) > 0))
+flat_suc_cp_list <- suc_cp_list %>% 
+  map2(names(suc_cp_list), ~set_names(.x,nm=str_c(.y, names(.x), sep = "__"))) %>% 
+  flatten() 
+```
+
+Visualize the results of functional profiling
+
+```{r cluster-profiler-vis}
+#Visualize functional results
+h_dot_list <- flat_suc_h_list %>% 
+  map2(names(flat_suc_h_list),~dotplot(.x, showCategory = 30) +
+        scale_color_gradientn(colours = mycolors [4:7]) +
+        labs(caption = .y, subtitle = "Hallmark"))
+cp_dot_list <- flat_suc_cp_list %>% 
+  map2(names(flat_suc_cp_list),~dotplot(.x, showCategory = 20) +
+        scale_color_gradientn(colours = mycolors [4:7]) +
+        labs(caption = .y, subtitle = "Reactome") +
+         theme(axis.text.y = element_text(size = 5)))
+cp_dot_list
+h_heat_list <- flat_suc_h_list %>% 
+  map2(names(flat_suc_h_list),~heatplot(.x, showCategory = 30) +
+        labs(caption = .y, subtitle = "Hallmark"))
+
+cp_heat_list <- flat_suc_cp_list %>% 
+  map2(names(flat_suc_cp_list),~heatplot(.x, showCategory = 20) +
+        labs(caption = .y, subtitle = "Reactome") +
+         theme(axis.text.y = element_text(size = 5)))
+
+#Combine the results into lists for grid plotting
+h_dot_heat_list <- map2(h_dot_list, h_heat_list, ~set_names(list(.x,.y), nm = c("dot","heat")))
+cp_dot_heat_list <- map2(cp_dot_list, cp_heat_list, ~set_names(list(.x,.y), nm = c("dot","heat")))
+```
+
+Plot the results on a grid
+```{r cluster-profiler-grid, fig.width=6, fig.height=12} 
+#pdf(here::here("protein_cluster_correlation/Hallmark_enrichment.pdf"), width = 6, height = 8)
+map(h_dot_heat_list,
+  ~cowplot::plot_grid(plotlist = .x, nrow = 2))
+#dev.off()
+#pdf(here::here("protein_cluster_correlation/Reactome_enrichment.pdf"), width = 6, height = 12)
+map(cp_dot_heat_list,
+  ~cowplot::plot_grid(plotlist = .x, nrow = 2))
+#dev.off()
+```
+
 
 
