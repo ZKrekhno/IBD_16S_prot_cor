@@ -520,7 +520,7 @@ otu_fam_carlasso <- as.data.frame(otu_table(phy_fam_carlasso)) %>%
 otu_fam_carlasso_rel <- otu_fam_carlasso %>% 
   mutate(across(where(is.numeric), function(x) x/sum(x)))
 #Select number of families to keep
-tokeep <- 20
+tokeep <- 10
 #Create two matrices - one for colon and one for ileum
 otu_fam_carlasso_rel_list <- set_names(c("Ileum","Colon"),c("Ileum","Colon")) %>% 
   map(~otu_fam_carlasso_rel [,c("feature", pull(filter(meta_full, Tissue_type == .x), var = "sample"))])
@@ -557,7 +557,33 @@ otu_fam_meta_carlasso <- otu_fam_carlasso_better_list %>%
   map(melt) %>% 
   map(left_join, select(meta_full, sample, group, TI_resection, Active_TI, Active_RC, Cholestyramine, Active_IBD),
       by = c("variable" = "sample"))
-
+```
+Now get the proteomics data and prepare that for analysis
+```{r carlasso-mq-prep}
+mq_raw <- read_tsv(here::here("../../Proteomics/normalyzer/Global_group/submitted_rawdata.txt"))
+#Keep only samples for which other data exist
+mq_raw_organized <- mq_raw %>% 
+  select(X, all_of(rownames(mq_mat)))
+#Separate the data into colon and ileum
+mq_raw_list <- otu_fam_meta_carlasso %>% 
+  map(~mq_raw_organized [, c("X", unique(.x$variable))])
+#Melt and convert into cluster abundances
+mq_raw_clust_list <- mq_raw_list %>% 
+  map(melt) %>% 
+  map(rename, protein = X, abundance = value, sample = variable) %>% 
+  map2(psy_ward_cluster_dfs, left_join, by = "protein") %>% 
+  map(filter, !is.na(value)) %>% 
+  map(mutate, value = str_c("cluster",value, sep = "_")) %>% 
+  map(group_by, value, sample) %>% 
+  map(summarize, cluster_mean = mean(abundance, na.rm = T)) 
+#Only keep successful clusters with some functional annotation
+mq_raw_suc_clust_list <- pmap(list(mq_raw_clust_list, suc_h_list, suc_cp_list),
+                                 ~ filter(..1, value %in% union(names(..2), names(..3))))
+#Add metadata to the MS data frame and proceed to carlasso analysis
+mq_suc_clust_meta_carlasso <- mq_raw_suc_clust_list %>% 
+  map(left_join, select(meta_full, sample, group, TI_resection, Active_TI, Active_RC, Cholestyramine, Active_IBD),
+      by = "sample") %>% 
+  map(rename, final_name = value, variable = sample, value = cluster_mean)
 ```
 
 
