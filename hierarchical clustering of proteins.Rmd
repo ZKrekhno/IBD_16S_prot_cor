@@ -11,6 +11,7 @@ library(phyloseq)
 library(dendextend)
 library(gplots)
 library(clusterProfiler)
+library(CARlasso)
 library(tidyverse)
 library(ggprism)
 theme_set(theme_prism(base_size = 14))
@@ -228,8 +229,8 @@ psy_ward_clusters_csv <- psy_ward_clusters %>%
   map(~list2DF(.x)) %>% 
   map(~mutate(.x,across(everything(), .fns = ~if_else(duplicated(.x), "NA", .x)))) %>% 
   map(mutate, across(everything(), str_remove, "^NA$"))
-walk2(psy_ward_clusters_csv, names(psy_ward_clusters_csv),
-      ~write_csv(.x,here::here(str_c("protein_cluster_correlation/",.y,"_protein_clusters.csv"))))
+#walk2(psy_ward_clusters_csv, names(psy_ward_clusters_csv),
+ #     ~write_csv(.x,here::here(str_c("protein_cluster_correlation/",.y,"_protein_clusters.csv"))))
 
 #Perform ORA analysis using either Hallmark or Reactome pathways
 
@@ -492,12 +493,12 @@ psy_ward_cluster_annot_genus <- psy_clust_genus %>%
   map(transmute,Cluster = str_c("Cluster",value, sep = "_")) 
 
 #Print out the heatmaps
-#pdf(here::here("protein_cluster_correlation/top_genera_clustering_heatmaps.pdf"), width = 9, height = 9)
+#pdf(here::here("protein_cluster_correlation/top_genera_clustering_heatmaps.pdf"), width = 8, height = 8)
 pwalk(list(psych_coef_genus_list, names(psych_coef_genus_list), mybreaks_list_genus),
      ~pheatmap::pheatmap(..1, color = color_sheme,
                    cluster_rows = F, cluster_cols = F, breaks = ..3,
                    treeheight_row = 0, treeheight_col = 0,
-                   main = str_c("No clustering", ..2, sep = "\n"), fontsize = 5))
+                   main = str_c("No clustering", ..2, sep = "\n"), fontsize = 7))
 pwalk(list(psych_coef_genus_list, names(psych_coef_genus_list), mybreaks_list_genus, 
            psych_tree_genus, psy_ward_cluster_annot_genus, cluster_colors_genus),
       ~pheatmap::pheatmap(..1, color = color_sheme, breaks = ..3,
@@ -507,6 +508,56 @@ pwalk(list(psych_coef_genus_list, names(psych_coef_genus_list), mybreaks_list_ge
                           annotation_colors = ..6))
 
 #dev.off()
+```
+Bacteria do not cluster that nicely, so keep them in separate genera. Finally, try to analyze the data with CARLASSO - families with protein clusters in colon or IBD
+```{r carlasso-otu-prep}
+#Prepare the bacterial family dataframes
+phy_fam_carlasso <- tax_glom(physeq, taxrank = "Family")
+tax_fam <- as.data.frame(tax_table(phy_fam_carlasso)) %>% 
+  rownames_to_column(var = "feature")
+otu_fam_carlasso <- as.data.frame(otu_table(phy_fam_carlasso)) %>% 
+  rownames_to_column(var = "feature") 
+otu_fam_carlasso_rel <- otu_fam_carlasso %>% 
+  mutate(across(where(is.numeric), function(x) x/sum(x)))
+#Select number of families to keep
+tokeep <- 20
+#Create two matrices - one for colon and one for ileum
+otu_fam_carlasso_rel_list <- set_names(c("Ileum","Colon"),c("Ileum","Colon")) %>% 
+  map(~otu_fam_carlasso_rel [,c("feature", pull(filter(meta_full, Tissue_type == .x), var = "sample"))])
+otu_fam_carlasso_rel_melt_list <- otu_fam_carlasso_rel_list %>% 
+  map(melt) %>% 
+  map(group_by, feature) %>% 
+  map(summarise, mean_abund = mean(value)) %>% 
+  map(arrange, desc(mean_abund))
+
+#Select families to keep and families to aggregate
+fam_to_keep <- otu_fam_carlasso_rel_melt_list %>% 
+  map(~pull(slice_head(.x, n=tokeep), feature))
+fam_others <- otu_fam_carlasso_rel_melt_list %>% 
+  map(~pull(slice_tail(.x, n=-tokeep), feature))
+
+#Prepare dataframes of just top bugs and the others aggregates
+otu_fam_carlasso_named <- otu_fam_carlasso_rel_list %>% 
+  map(~otu_fam_carlasso [,colnames(.x)]) %>%
+  map2(fam_to_keep, ~ filter(.x, feature %in% .y))
+otu_fam_carlasso_others <- otu_fam_carlasso_rel_list %>% 
+  map(~otu_fam_carlasso [,colnames(.x)]) %>%
+  map2(fam_others, ~ filter(.x, feature %in% .y)) %>% 
+  map(summarise,across(where(is.numeric), sum)) %>%  
+  map(mutate, feature = "all_others")
+otu_fam_carlasso_list <- otu_fam_carlasso_named %>% 
+  map2(otu_fam_carlasso_others, bind_rows)
+#Replace feature ids with meaningful name
+otu_fam_carlasso_better_list <- otu_fam_carlasso_list %>% 
+  map(left_join, tax_fam, by = "feature") %>% 
+  map(mutate, final_name = if_else(is.na(Family),feature, Family))
+#Add metadata to the dataframes
+otu_fam_meta_carlasso <- otu_fam_carlasso_better_list %>% 
+  map(select, -feature, -Kingdom, -Phylum, -Order, -Class, -Family, -Genus, -Species) %>% 
+  map(melt) %>% 
+  map(left_join, select(meta_full, sample, group, TI_resection, Active_TI, Active_RC, Cholestyramine, Active_IBD),
+      by = c("variable" = "sample"))
+
 ```
 
 
