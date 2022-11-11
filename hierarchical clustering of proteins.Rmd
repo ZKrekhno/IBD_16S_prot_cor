@@ -132,14 +132,14 @@ psych_dend <- psych_tree %>%
 
 map(psych_dend, nleaves)
 map(psych_dend, nnodes)
-#Try to cut the dendrogram into clusters
-cluster_number <- 6
+#Try to cut the dendrogram into clusters - select arbitrarily based on the correlation heatmap
+cluster_number <- set_names(c(8,7), nm = names(psych_dend))
 psy_clust <- psych_dend %>% 
-  map(cutree, k=cluster_number)
+  map2(cluster_number, ~cutree(.x,k=.y))
 #Check how many proteins in each cluster
 map(psy_clust, table)
 
-walk2(psych_dend,names(psych_dend), ~plot(color_branches(.x, k=cluster_number), leaflab = "none", xlab = .y ))
+pwalk(list(psych_dend,names(psych_dend),cluster_number), ~plot(color_branches(..1, k=..3), leaflab = "none", xlab = ..2 ))
 ```
 
 We can try visualizing the results in a heatmap of correlations
@@ -147,48 +147,66 @@ We can try visualizing the results in a heatmap of correlations
 ```{r k-medoid-cluster, fig.width=6, fig.height=6}
 #Create clusters using k-medoids
 psy_kmed <- psych_dist %>% 
-  map(cluster::pam, cluster_number)
+  map2(cluster_number, ~cluster::pam(.x,k=.y))
 map(psy_kmed, ~table(.x$cluster))
 psy_kmed_clusters <- psy_kmed %>% 
   map(~.x$cluster)
 ```
 
 
-```{r heatmap, fig.width=6, fig.height=6}
+```{r pheatmap, fig.width=9, fig.height=9}
+#Set the heatmap color scheme
 mycolors <- rcartocolor::carto_pal(name = "Geyser")
+pal_length <- 255
+color_sheme <- colorRampPalette(mycolors) (pal_length)
+#Set the color scheme for the cluster annotation
+cluster_colors <- cluster_number %>% 
+  map(~list(Cluster = set_names(rcartocolor::carto_pal(name = "Vivid") [1:.x],
+                                           nm = str_c("Cluster",1:.x, sep = "_"))))
 
-color_sheme <- colorRampPalette(mycolors) (255)
+#Set the breaks to be able to center the heatmap colors around 0
+mybreaks_list <- psych_coef_list %>% 
+  map(~c(seq(min(.x), 0, length.out=ceiling(pal_length/2) + 1), 
+              seq(max(.x)/pal_length, max(.x), length.out=floor(pal_length/2))))
 
-#pdf(here::here("protein_cluster_correlation/DA_clustering_heatmaps.pdf"), width = 6, height = 6)
-pwalk(list(psych_coef_list, psych_dend,names(psych_coef_list)), 
-     ~heatmap.2(..1, Rowv = NULL, Colv =NULL, dendrogram = "none", 
-                col = color_sheme, 
-                trace = "none", density.info = "none", revC = T,
-                key.title = "Color Key", key.xlab = "Spearman's R", sub = ..3, keysize = 1.5,
-                cexRow = 0.5,cexCol = 0.5, main = "No clustering", labCol = F, labRow = F))
+#Prepare clustering according to the Ward method
+psy_ward_cluster_annot <- psy_clust %>% 
+  map(enframe) %>% 
+  map(column_to_rownames, var = "name") %>% 
+  map(transmute,Cluster = str_c("Cluster",value, sep = "_")) 
+#Prepare clustering according to k-medoid method and re-order the correlation matrix according to the k-medoid clustering
+psy_kmed_cluster_annot <- psych_dist %>% 
+  map2(cluster_number, ~cluster::pam(.x,k=.y,cluster.only = T)) %>% 
+  map(enframe) %>% 
+  map(column_to_rownames, var = "name") %>% 
+  map(transmute,Cluster = str_c("Cluster",value, sep = "_")) 
+psych_kmed_coef_list <- pmap(list(psych_coef_list,psych_dist,cluster_number),
+                             ~ ..1 [order(cluster::pam(..2,k=..3, cluster.only = T)),
+                                   order(cluster::pam(..2,k=..3, cluster.only = T))])
 
-pwalk(list(psych_coef_list, psych_dend,names(psych_coef_list)), 
-     ~heatmap.2(..1, Rowv = ladderize(..2), Colv =ladderize(..2), dendrogram = "none", 
-                col = color_sheme, 
-                trace = "none", density.info = "none", revC = T,
-                key.title = "Color Key", key.xlab = "Spearman's R", sub = ..3, keysize = 1.5,
-                 cexRow = 0.5,cexCol = 0.5, main = "Ward clustering",labCol = F, labRow = F))
-psy_coef_kmed_list <- psych_coef_list %>% 
-  map2(psy_kmed_clusters, ~ .x [order(.y),order(.y)])
-psy_kmed_cluster_cols <- psy_kmed_clusters %>% 
-  map(~.x [order(.x)]) %>% 
-  map(as_tibble) %>% 
-  map(mutate, color = rcartocolor::carto_pal(name = "Antique") [value])
-  
-pwalk(list(psy_coef_kmed_list,names(psych_coef_list), psy_kmed_cluster_cols), 
-     ~heatmap.2(..1, Rowv = NULL, Colv =NULL, dendrogram = "none", 
-                col = color_sheme, 
-                trace = "none", density.info = "none", revC = T,
-                key.title = "Color Key", key.xlab = "Spearman's R", sub = ..2, keysize = 1.5,
-                cexRow = 0.5,cexCol = 0.5, main = "K-medoid clustering", RowSideColors = pull(..3,var = "color"),
-                labCol = F, labRow = F))
+#Print out the heatmaps
+#pdf(here::here("protein_cluster_correlation/DA_clustering_heatmaps.pdf"), width = 9, height = 9)
+pwalk(list(psych_coef_list, names(psych_coef_list), mybreaks_list),
+     ~pheatmap::pheatmap(..1, color = color_sheme,
+                   cluster_rows = F, cluster_cols = F, breaks = ..3,
+                   treeheight_row = 0, treeheight_col = 0,
+                   main = str_c("No clustering", ..2, sep = "\n"), fontsize = 5))
+pwalk(list(psych_coef_list, names(psych_coef_list), mybreaks_list, psych_tree, psy_ward_cluster_annot, cluster_colors),
+      ~pheatmap::pheatmap(..1, color = color_sheme, breaks = ..3,
+                   cluster_rows = ..4, cluster_cols = ..4,
+                   annotation_col = ..5, treeheight_row = 0, treeheight_col = 0,
+                   main = str_c("Ward",..2,sep = "\n"), fontsize = 5,
+                   annotation_colors = ..6))
+
+pwalk(list(psych_kmed_coef_list, names(psych_kmed_coef_list), mybreaks_list, psy_kmed_cluster_annot, cluster_colors),
+      ~pheatmap::pheatmap(..1, color = color_sheme,
+                   cluster_rows = F, cluster_cols = F, breaks = ..3,
+                   annotation_col = ..4, treeheight_row = 0, treeheight_col = 0,
+                   main = str_c("K-Medoid", ..2, sep = "\n"), fontsize = 5,
+                   annotation_colors = ..5))
 #dev.off()
 ```
+
 Perform functional analysis of the clusters
 ```{r cluster-profiler}
 h <- read.gmt(here::here("h.all.v7.5.1.symbols.gmt"))
