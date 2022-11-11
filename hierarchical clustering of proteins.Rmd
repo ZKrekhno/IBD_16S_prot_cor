@@ -522,7 +522,7 @@ otu_fam_carlasso_rel <- otu_fam_carlasso %>%
 #Select number of families to keep
 tokeep <- 10
 #Create two matrices - one for colon and one for ileum
-otu_fam_carlasso_rel_list <- set_names(c("Ileum","Colon"),c("Ileum","Colon")) %>% 
+otu_fam_carlasso_rel_list <- set_names(c("Colon", "Ileum"),c("Colon", "Ileum")) %>% 
   map(~otu_fam_carlasso_rel [,c("feature", pull(filter(meta_full, Tissue_type == .x), var = "sample"))])
 otu_fam_carlasso_rel_melt_list <- otu_fam_carlasso_rel_list %>% 
   map(melt) %>% 
@@ -585,5 +585,52 @@ mq_suc_clust_meta_carlasso <- mq_raw_suc_clust_list %>%
       by = "sample") %>% 
   map(rename, final_name = value, variable = sample, value = cluster_mean)
 ```
+Now ready for Carlasso analysis
+```{r carlasso-setup}
+carlasso_df_long_list <- otu_fam_meta_carlasso %>% 
+  map2(mq_suc_clust_meta_carlasso, bind_rows)
+#Make the final carlasso dfs
+carlasso_final_df_list <- carlasso_df_long_list %>% 
+  map(pivot_wider, names_from = final_name, values_from = value) %>% 
+  map(mutate, 
+      TI_resection = fct_relevel(TI_resection, "Yes","Not_applicable", "No"),
+      Active_IBD = fct_relevel(Active_IBD, "Yes", "Not_applicable", "No"),
+      Active_RC = fct_relevel(Active_RC,"Yes", "Not_applicable", "No"),
+      Active_TI = fct_relevel(Active_TI,"Yes", "Not_applicable", "No"))
+#Prepare the carlasso formula
+carlasso_lhs_formula_list <- carlasso_final_df_list %>% 
+  map(~colnames(.x)) %>% 
+  map(~ .x [str_detect(.x,"f__") | str_detect(.x,"cluster")]) %>% 
+  map(~ c(.x, "all_others")) %>% 
+  map(str_c, collapse = " + ")
+carlasso_rhs_formula_list <- carlasso_final_df_list %>% 
+  map(~colnames(.x)) %>% 
+  map(~ .x [str_detect(.x,"f__", negate = T) & 
+              str_detect(.x,"cluster", negate = T) &
+              str_detect(.x,"all_others", negate = T) &
+              str_detect(.x,"variable", negate = T)]) %>%
+  map(str_c, collapse = " + ")
+carlasso_formula_list <- carlasso_lhs_formula_list %>% 
+  map2(carlasso_rhs_formula_list, str_c, sep = " ~ ")
+#Finally, run carlasso
+classo_res_list <- carlasso_final_df_list %>% 
+  map2(carlasso_formula_list, 
+       ~CARlasso(as.formula(.y),
+                    data = .x,link = "logit", 
+                    adaptive = TRUE, n_iter = 2000, 
+                    n_burn_in = 1000, thin_by = 2))
+classo_res_hs_list <- classo_res_list %>% 
+  map(horseshoe)
+```
+Now can plot the results
+```{r carlasso-plot, fig.width=11, fig.height=11}
+#pdf(here::here("protein_cluster_correlation/carlasso_protein_cluster_top_10_families.pdf"), width = 12, height = 12)
+classo_res_hs_list %>% 
+  map2(names(classo_res_hs_list),~plot(.x) +
+         ggraph::scale_edge_color_manual(values = mycolors [c(1,7)]) +
+         ggtitle(.y))
+#dev.off()
+```
+
 
 
