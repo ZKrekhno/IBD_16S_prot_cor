@@ -67,9 +67,9 @@ all(map2_lgl(otu_filt_list, mq_list, ~all(rownames(.x) == rownames(.y))))
 Further filter the proteomics data to just include DE proteins between active/inactive IBD vs control in each group
 ```{r select_top_prots}
 #Import the results
-da_res <- map(list.files(here::here("spear_subset_on_Foster")),
+da_res <- map(list.files(here::here("spear_subset_on_Foster"), pattern = "full"),
               ~read_csv( file = here::here(str_c("spear_subset_on_Foster/",.)))) 
-da_res <- set_names(da_res, nm = list.files(here::here("spear_subset_on_Foster")))
+da_res <- set_names(da_res, nm = list.files(here::here("spear_subset_on_Foster"), pattern = "full"))
 #Reduce the results to one table, and filter afterwards
 da_res_interest <- da_res %>% 
   reduce(left_join, by = c("gene.name","first.id")) %>% 
@@ -152,6 +152,8 @@ pwalk(list(scatter_list, xlabs,ylabs, rcoefs,pvals, names(scatter_list)),
   
 #dev.off()
 ```
+
+
 Plot bubble plots of Spearman correlations
 ```{r spearman-plot-bubble}
 #Get taxonomy to assign meaningul names
@@ -195,5 +197,36 @@ pwalk(list(df_tax_final,ranks, names(df_tax_final)),
               scale_size(name = "Adjusted p",trans = 'reverse') +
               labs(x=element_blank(), title = ..3, subtitle = "Yes means active IBD, No means inactive,\nNot applicable is control") +
               theme_bw(base_size = 12) + theme(axis.text.x = element_text(angle = 45, hjust = 0.9))))
+#dev.off()
+```
+Plot specifically APOL2 and Enterobacteriace correlation in IBD Active IBD Ileum
+
+```{r plot-APOL2-ENTERO}
+#Select just protein and otu as selected top correlation
+mq_select_list_apo <- set_names(mq_list,nm=dfs_names) %>% 
+  keep(names(.) %in% names(df_top_cors))  %>% 
+  map( ~ .x [,str_which(colnames(.x),"APOL2")]) %>%  
+  map(as.data.frame, stringsAsFactors = F) %>% 
+  keep(names(.) == "Family_Ileum_Yes")
+#Get ID for Enterobacteriaceae
+entero_id <- df_tax_final %>% 
+  keep(names(.) == "Family_Ileum_Yes") %>% 
+  map(filter, str_detect(Family,"Enterobacteriaceae")) %>% 
+  map(pull,var = "Var2")
+otu_select_list_entero <- set_names(otu_filt_list,nm=dfs_names) %>% 
+  keep(names(.) %in% names(df_top_cors)) %>% 
+  keep(names(.) == "Family_Ileum_Yes") %>% 
+  map2(entero_id, ~ .x [,.y]) %>% 
+  map(as.data.frame, stringsAsFactors = F) 
+#prepare list for scatter plots
+scatter_list_indiv <- map2(mq_select_list_apo, otu_select_list_entero, merge, by = 0)
+
+#svg(here::here("spear_subset_on_Foster/APOL2-Entero filteredFamily_Ileum_Yes Scatter.svg"), width = 6, height = 4)
+pwalk(list(scatter_list_indiv, names(scatter_list_indiv)), 
+      ~print(ggplot(..1, aes(x = `.x[[i]].x`, y = `.x[[i]].y`)) +
+               geom_point() +
+               geom_smooth(method = "lm") + 
+               labs(x = "APOL2", y = "Enterobacteriaceae")))
+  
 #dev.off()
 ```
