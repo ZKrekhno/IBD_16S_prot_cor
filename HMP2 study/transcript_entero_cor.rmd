@@ -1,0 +1,266 @@
+---
+title: "Correlation mito transcripts with Entero bugs"
+output: html_notebook
+---
+
+```{r lib-set, include=FALSE}
+library(rcartocolor)
+library(patchwork)
+library(psych)
+library(EDASeq)
+library(qiime2R)
+library(ggprism)
+library(tidyverse)
+library(reshape2)
+```
+
+```{r helpers}
+diverg_colors <- carto_pal(n=7, "Geyser")
+discrete_colors <- carto_pal(name = "Bold")
+theme_set(theme_prism(base_size = 12, axis_text_angle = 45) + theme(legend.title = element_text()))
+```
+
+
+Start by importing metadata, 16S data, and the transcriptomics
+```{r import}
+meta <- read_csv(here::here("HMP2 study/hmp2_metadata.csv"))
+fam <- read_csv(here::here("HMP2 study/16S/16S.family.csv"))
+genus <- read_csv(here::here("HMP2 study/16S/16S.genus.csv"))
+#Get transcriptome counts from the HMP2 dataset
+tx <- read.table(here::here("HMP2 study/host_tx_counts.tsv"), sep = "\t")
+```
+Normalize transcript reads
+```{r norm-tx}
+tx_filt <- tx [rowMeans(tx) > 10,colSums(tx) > 371395] #keep only reasonably expressed reads and samples
+#Can't really plot reads in a barplot, so instead just plot read distribution
+hist(colSums(tx_filt))
+tx_data <- newSeqExpressionSet(counts = as.matrix(tx_filt))
+boxplot(tx_data)
+#Normalize the transcripts
+tx_data_norm <- betweenLaneNormalization(tx_data, which = "full")
+boxplot(tx_data_norm)
+tx_norm_counts <- tx_data_norm@assayData$normalizedCounts
+#Don't log transform before averaging values
+#tx_norm_log <- log1p(tx_norm_counts)
+```
+
+Next organize mitochondrial genes of interest
+
+```{r mito_tx}
+#Read in transcripts of interes
+mito_genes <- read_tsv(here::here("HMP2 study/Correlation/uniprot in gene_name.tsv")) %>% 
+  filter(To != "UBE2K")
+#Confirm that each of genes is present in the tx table
+index_mito <- mito_genes$To %>% 
+  map(~str_which(rownames(tx_norm_counts), .x)) %>% 
+  flatten_dbl()
+#Subset tx
+tx_mito <- tx_norm_counts [index_mito,]
+#Rename transcriptomics columns to participant ID to match with tax data
+tx_mito_long <- tx_mito %>% 
+  as_tibble(rownames = "gene") %>% 
+  pivot_longer(-gene, names_to = "External ID", values_to = "Abundance") %>% 
+  left_join(dplyr::select(meta, `External ID`, subject_id = `Participant ID`, visit_num, biopsy_location, diagnosis, data_type),
+            by = "External ID") %>% 
+  filter(visit_num == 1, data_type == "host_transcriptomics", 
+         (biopsy_location == "Rectum" | biopsy_location == "Ileum")) %>%   
+  select(gene, subject_id, Abundance, biopsy_location) %>% 
+  pivot_wider(names_from = gene, values_from = "Abundance", values_fn = mean) %>% 
+  mutate(across(where(is.numeric), log1p))
+```
+
+Will have to use microbial counts as relative abundance (so as is). Prepare the table for mixed linear modelling.
+```{r mlm-prep}
+#Family and genus have 2 measurements for M2021 subject in the rectum, so need to average those values out
+fam_avg <- fam %>% 
+  group_by(subject_id,biopsy_location, diagnosis) %>% 
+  summarise(across(.cols = where(is.numeric), .fns = mean)) %>% 
+  ungroup()
+genus_avg <- genus %>% 
+  group_by(subject_id,biopsy_location) %>% 
+  summarise(across(.cols = where(is.numeric), .fns = mean)) %>% 
+  ungroup()
+#Combine the tables
+fam_tx <- inner_join(fam_avg, tx_mito_long, by = c("subject_id","biopsy_location")) %>%  
+  left_join(genus_avg, by = c("subject_id","biopsy_location")) %>%  
+  mutate(diagnosis_vague = if_else(diagnosis == "nonIBD", "nonIBD","IBD"))
+#Now prep formulas and do linear modelling
+transcripts <- colnames(tx_mito_long) [-1:-2]
+#Try modelling with vague diagnosis first - IBD vs nonIBD
+mito_frms_vague <- str_c(transcripts,"Enterobacteriaceae + biopsy_location + diagnosis_vague", sep = " ~ ")
+mito_frms <- str_c(transcripts,"Enterobacteriaceae + biopsy_location + diagnosis", sep = " ~ ")
+mito_frms_vague_gen <- str_c(transcripts,"EscherichiaShigella + biopsy_location + diagnosis_vague", sep = " ~ ")
+mito_frms_gen <- str_c(transcripts,"EscherichiaShigella + biopsy_location + diagnosis", sep = " ~ ")
+#Prepare all formulas for genus and family with vague and non-vague IBD
+all_formulas <- list(mito_frms_vague, mito_frms, mito_frms_vague_gen, mito_frms_gen) %>% 
+  set_names(c("Family_vague","Family","Genus_vague","Genus")) %>% 
+  map(map,as.formula) %>%   
+  map(set_names, nm = transcripts)
+#Run regression analysis
+vague_fam_lm <- all_formulas %>% 
+  map_depth(2, ~lm(.x, data = fam_tx))
+vague_fam_sum <- vague_fam_lm %>% 
+  map_depth(2,~data.frame(coef = summary(.x)$coefficients [,1],
+                  p = summary(.x)$coefficients [,4],
+                  r_squared = summary(.x)$adj.r.squared)) %>% 
+  map_depth(2,rownames_to_column, var = "item") %>%
+  map_depth(2,~filter(.x, (item == "Enterobacteriaceae"|item == "EscherichiaShigella"))) %>% 
+  map(~imap(.x, ~mutate(.x, gene = .y))) %>% 
+  map_depth(1, purrr::reduce, bind_rows)
+vague_fam_sum_df_list <- vague_fam_sum %>% 
+  map(~mutate(.x,padj = p.adjust(p, method = "BH"))) %>% 
+  map(arrange, padj)
+#Select top correlations
+reg_res_select <- vague_fam_sum_df_list %>% 
+  map(arrange, p) %>% 
+  #map(arrange, desc(abs(coef))) %>% 
+  map(slice_head, n=15) %>% 
+  map(~mutate(.x, 
+              label = case_when(
+                padj < 0.001 ~ "***",
+                padj < 0.01 ~ "**",
+                padj < 0.05 ~ "*",
+                padj < 0.1 ~ "+"
+              )))
+```
+
+Plot results of the regression analysis
+```{r mlm-results, fig.width=7, fig.height=2.8}
+plot_regression_list <- map2(reg_res_select, all_formulas, 
+                            ~ggplot(.x, aes(x = gene, y = item, fill = coef)) +
+                              geom_point(shape = 21, size = 7.5) + 
+                              geom_text(aes(x = gene, y = item, label = label),color = "black", 
+                                        size = 5, nudge_y = -0.01) +
+                              labs(x = element_blank(), y = element_blank(), fill = "Effect Size",
+                                   caption = str_c("sample formula =\n",as.character(.y))) +
+                              scale_fill_gradient2(low = diverg_colors [1], mid = diverg_colors [4],
+                                                   high = diverg_colors [7], midpoint = 0) + 
+                              theme(text = element_text(family = "serif")))
+plot_regression_list
+```
+
+
+```{r mlm-results-print, fig.width=7, fig.height=2.8, eval=FALSE}
+plot_regression_list %>% 
+  iwalk(~ggsave(filename = here::here(str_c("HMP2 study/Correlation/regression results of",.y,".png")),
+                plot = .x,
+                width = 7,
+                height = 2.8, dpi = 1080))
+plot_regression_list %>% 
+  iwalk(~ggsave(filename = here::here(str_c("HMP2 study/Correlation/regression results of",.y,".svg")),
+                plot = .x,
+                width = 7,
+                height = 2.8))
+```
+
+Next step is to Haggai requested analysis. Correlate proteins in just control vs CD in the rectums only.
+Prep the data for the correlations first.
+```{r cor-prep}
+#Filter UC and ileum samples out
+select_fam_tx <- fam_tx %>% 
+  filter(diagnosis != "UC", biopsy_location != "Ileum")
+#We can prepare several matrices for correlation
+cor_dfs <- set_names(c("CD","nonIBD"),c("CD","nonIBD")) %>% 
+  map(~filter(select_fam_tx, diagnosis == .x)) %>% 
+  append(list("Both" = select_fam_tx))
+#Separate out enterobugs and transcripts from each table
+cor_mats <- cor_dfs %>% 
+  map(~list("Entero" = select(.x, Enterobacteriaceae),
+            "Transcripts" = select(.x, all_of(transcripts)))) %>% 
+  map_depth(2, as.matrix)
+```
+
+
+```{r cor-analysis}
+#Now can run correlations
+spear_cors <- cor_mats %>% 
+  map(~corr.test(x=.x [[1]], y = .x [[2]], method = "spearman", adjust = "BH"))
+#Extract r, p, and padj from the this spearman object
+spear_df <- spear_cors %>% 
+  map(~list(r = melt(.x [["r"]]),
+            p = melt(.x [["p"]]),
+            padj = melt(.x [["p.adj"]]))) %>% 
+  map(reduce, left_join, by = c("Var1","Var2")) %>% 
+  imap(~mutate(.x, diagnosis = .y)) %>% 
+  reduce(bind_rows) %>% 
+  rename(r = value.x, p = value.y, padj = value) %>% 
+  mutate(label = case_when(
+    padj < 0.001 ~ "***",
+    padj < 0.01 ~ "**",
+    padj < 0.05 ~ "*",
+    padj < 0.1 ~ "+"
+  )) %>% 
+  arrange(r)
+```
+
+Plot results of the correlation analysis
+```{r spear_bubble, fig.width=6, fig.height=10}
+long_spear_plot <- ggplot(spear_df, aes(y = fct_reorder(Var2,r),x = diagnosis,fill = r)) +
+  geom_tile() +
+  geom_text(aes(label = label), color = "black", size = 5) +
+  labs(x = element_blank(), y = element_blank(), fill = "Spearman's Rho",
+       caption = "Spearman Correlation with\nEnterobacteriaceae Family in the Rectum") +
+  scale_fill_gradient2(low = diverg_colors [1], mid = diverg_colors [4],
+                       high = diverg_colors [7], midpoint = 0) +
+  scale_x_discrete(labels = c("CD" = "Crohn's Disease", "nonIBD" = "no IBD"))
+long_spear_plot
+#ggsave(filename = here::here(str_c("HMP2 study/Correlation/Spearman correlation in the Rectum in CD, nonIBD, or both.png")),
+ #               plot = long_spear_plot,
+  #              width = 6,
+   #             height = 10, dpi = 1080)
+```
+
+Plot the results of just top hits - as heatmap and scatter plots
+```{r spear_top, fig.width=6, fig.height=5}
+#Filter the top results to top 15
+top_spear_df <- spear_df %>% 
+  arrange(padj) %>%
+  group_by(Var2) %>% 
+  nest()  %>% 
+  ungroup() %>% 
+  slice_head(n=15) %>% 
+  unnest(cols = c(data))
+top_long_spear_plot <- ggplot(top_spear_df, aes(y = fct_reorder(Var2,r),x = diagnosis,fill = r)) +
+  geom_tile() +
+  geom_text(aes(label = label), color = "black", size = 5) +
+  labs(x = element_blank(), y = element_blank(), fill = "Spearman's Rho",
+       caption = "Top 15 Spearman Correlation with\nEnterobacteriaceae Family in the Rectum") +
+  scale_fill_gradient2(low = diverg_colors [1], mid = diverg_colors [4],
+                       high = diverg_colors [7], midpoint = 0) +
+  scale_x_discrete(labels = c("CD" = "Crohn's Disease", "nonIBD" = "no IBD"))
+top_long_spear_plot
+#ggsave(filename = here::here(str_c("HMP2 study/Correlation/Top 15 Spearman correlation in the Rectum in CD, nonIBD, or both.png")),
+ #               plot = top_long_spear_plot,
+  #              width = 6,
+   #             height = 5, dpi = 1080)
+```
+Finally, plot scatter plots of ACAT1 and LRPPRC as most convincing hits (for example)
+```{r scatter_cors, fig.width=9, fig.height=7}
+top_select_fam_tx <- select_fam_tx %>% 
+  select(diagnosis, Enterobacteriaceae, ACO2) %>% 
+  pivot_longer(cols = -c("diagnosis","Enterobacteriaceae"), names_to = "Gene", values_to = "Transcript_Abundance")
+scatters <- ggplot(top_select_fam_tx, aes_(x=quote(Enterobacteriaceae*100), y = quote(Transcript_Abundance))) +
+  geom_point(aes(color = diagnosis), size = 2.5) +
+  geom_smooth(method = "lm", linewidth = 1, se = F, color = discrete_colors [12]) +
+  geom_smooth(aes(color = diagnosis),method = "lm", linewidth = 1.5, se = F) +
+  scale_color_manual(values = c("nonIBD" = discrete_colors [4],"CD" = discrete_colors [5]),
+                     labels = c("CD" = "Crohn's Disease", "nonIBD" = "no IBD"),
+                     name = "Diagnosis") +
+  labs(x = "Enterobacteriaceae\nRelative Abundance", y = "Log-normalized\nTranscript Abundance") +
+  facet_wrap(~Gene, scales = "free")
+scatters
+#ggsave(filename = here::here(str_c("HMP2 study/Correlation/Sample Scatterplots in the Rectum in CD, nonIBD, or both.png")),
+ #               plot = scatters,
+  #              width = 9,
+   #             height = 7, dpi = 1080)
+```
+
+
+
+
+
+
+
+
+
+
